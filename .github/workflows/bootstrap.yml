@@ -2,14 +2,14 @@ name: Bootstrap MVP
 
 on:
   push:
-    branches: [ feature/initial-dh-sync ]
+    branches:
+      - feature/initial-dh-sync
 
 permissions:
   contents: write
 
 jobs:
   bootstrap:
-    if: ${{ hashFiles('bootstrap.tar.gz') != '' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
