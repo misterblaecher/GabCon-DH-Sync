@@ -44,7 +44,7 @@ public final class DhDeltaBuilder {
     public record DeltaResult(Path directory, Path manifest, List<DeltaFile> files) {}
 
     private record SnapshotRef(Path directory, DhSnapshotService.SnapshotManifest manifest) {}
-    private record Column(String name, int pkOrder) {}
+    private record Column(String name, String type, boolean notNull, String defaultValue, int pkOrder) {}
 
     public static DeltaResult buildLatest(String worldId) throws Exception {
         Path snapshotRoot = Path.of("gabcondhsync", "snapshots", DhSnapshotService.safeStem(worldId))
@@ -95,8 +95,11 @@ public final class DhDeltaBuilder {
             verifySnapshotFile(oldDb, older);
             verifySnapshotFile(newDb, newer);
 
-            String deltaName = DhSnapshotService.safeStem(dimension) + ".delta.sqlite";
-            Path deltaDb = deltaRoot.resolve(deltaName);
+            String sourceName = newer.fileName();
+            String deltaName = sourceName.endsWith(".sqlite")
+                    ? sourceName.substring(0, sourceName.length() - ".sqlite".length()) + ".delta.sqlite"
+                    : sourceName + ".delta.sqlite";
+            Path deltaDb = checkedChild(deltaRoot, deltaName);
             List<TableStats> stats = buildDimensionDelta(oldDb, newDb, deltaDb, older.sha256(), newer.sha256());
 
             long operations = stats.stream().mapToLong(s -> s.upserts() + s.deletes()).sum();
@@ -154,6 +157,8 @@ public final class DhDeltaBuilder {
                 statement.execute("INSERT INTO DeltaMeta VALUES ('format','gabcon-dh-delta-v1')");
                 statement.execute("INSERT INTO DeltaMeta VALUES ('oldSha256','" + sqliteQuote(oldSha256) + "')");
                 statement.execute("INSERT INTO DeltaMeta VALUES ('newSha256','" + sqliteQuote(newSha256) + "')");
+
+                validateAttachedDatabases(statement);
 
                 for (String table : DATA_TABLES) {
                     stats.add(diffTable(conn, statement, table));
@@ -235,9 +240,36 @@ public final class DhDeltaBuilder {
         List<Column> columns = new ArrayList<>();
         String sql = "PRAGMA " + qident(schema) + ".table_info(" + qident(table) + ")";
         try (Statement s = conn.createStatement(); ResultSet rs = s.executeQuery(sql)) {
-            while (rs.next()) columns.add(new Column(rs.getString("name"), rs.getInt("pk")));
+            while (rs.next()) columns.add(new Column(
+                    rs.getString("name"),
+                    rs.getString("type"),
+                    rs.getInt("notnull") != 0,
+                    rs.getString("dflt_value"),
+                    rs.getInt("pk")
+            ));
         }
         return List.copyOf(columns);
+    }
+
+    private static void validateAttachedDatabases(Statement statement) throws SQLException {
+        long oldLegacy = scalarLong(statement, "SELECT COUNT(*) FROM olddb.Legacy_FullData_V1");
+        long newLegacy = scalarLong(statement, "SELECT COUNT(*) FROM newdb.Legacy_FullData_V1");
+        if (oldLegacy != 0 || newLegacy != 0) {
+            throw new SQLException("Legacy_FullData_V1 contains rows; refusing an incomplete/legacy migration state");
+        }
+
+        long schemaDiff = scalarLong(statement,
+                "SELECT COUNT(*) FROM (SELECT * FROM olddb.Schema EXCEPT SELECT * FROM newdb.Schema)")
+                + scalarLong(statement,
+                "SELECT COUNT(*) FROM (SELECT * FROM newdb.Schema EXCEPT SELECT * FROM olddb.Schema)");
+        if (schemaDiff != 0) throw new SQLException("DH Schema table changed between snapshots");
+    }
+
+    private static long scalarLong(Statement statement, String sql) throws SQLException {
+        try (ResultSet rs = statement.executeQuery(sql)) {
+            if (!rs.next()) throw new SQLException("Query returned no row: " + sql);
+            return rs.getLong(1);
+        }
     }
 
     private static List<SnapshotRef> loadSnapshots(Path root, String worldId) throws Exception {
