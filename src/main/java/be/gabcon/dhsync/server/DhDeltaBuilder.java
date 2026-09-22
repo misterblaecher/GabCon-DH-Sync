@@ -54,22 +54,26 @@ public final class DhDeltaBuilder {
 
         SnapshotRef previous = snapshots.get(snapshots.size() - 2);
         SnapshotRef current = snapshots.get(snapshots.size() - 1);
-        return build(previous, current, worldId);
+        return build(previous, current, worldId, Path.of("gabcondhsync", "deltas"));
     }
 
     static DeltaResult build(Path previousDirectory, Path currentDirectory, String worldId) throws Exception {
-        return build(readSnapshot(previousDirectory, worldId), readSnapshot(currentDirectory, worldId), worldId);
+        return build(previousDirectory, currentDirectory, worldId, Path.of("gabcondhsync", "deltas"));
     }
 
-    private static DeltaResult build(SnapshotRef previous, SnapshotRef current, String worldId) throws Exception {
+    static DeltaResult build(Path previousDirectory, Path currentDirectory, String worldId, Path deltaBase) throws Exception {
+        return build(readSnapshot(previousDirectory, worldId), readSnapshot(currentDirectory, worldId), worldId, deltaBase);
+    }
+
+    private static DeltaResult build(SnapshotRef previous, SnapshotRef current, String worldId, Path deltaBase) throws Exception {
         validatePair(previous.manifest(), current.manifest(), worldId);
 
         Instant from = Instant.parse(previous.manifest().createdAtUtc());
         Instant to = Instant.parse(current.manifest().createdAtUtc());
         if (!to.isAfter(from)) throw new IllegalStateException("Current snapshot must be newer than previous snapshot");
 
-        Path deltaRoot = Path.of("gabcondhsync", "deltas", DhSnapshotService.safeStem(worldId),
-                STAMP.format(from) + "--" + STAMP.format(to)).toAbsolutePath().normalize();
+        Path deltaRoot = deltaBase.resolve(DhSnapshotService.safeStem(worldId))
+                .resolve(STAMP.format(from) + "--" + STAMP.format(to)).toAbsolutePath().normalize();
         Files.createDirectories(deltaRoot);
 
         Map<String, DhSnapshotService.SnapshotFile> oldByDimension = byDimension(previous.manifest().files());
