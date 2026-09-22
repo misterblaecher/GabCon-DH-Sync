@@ -18,6 +18,10 @@ public final class ServerEvents {
     }
     @SubscribeEvent public void onRegisterCommands(RegisterCommandsEvent event) { GabConCommands.register(event.getDispatcher()); }
     @SubscribeEvent public void onServerStarted(ServerStartedEvent event) {
+        if ("CHANGE_ME".equals(ServerConfig.WORLD_ID.get())) {
+            ServerConfig.WORLD_ID.set("gabcon-main");
+            GabConDhSync.LOGGER.info("[GabConDHSync] Migrated legacy worldId placeholder to gabcon-main.");
+        }
         DhCompatibility.Status status = DhCompatibility.detect();
         GabConDhSync.LOGGER.info("[GabConDHSync] Distant Horizons: present={}, mod={}, api={}, compatible={} ({})", status.present(), status.modVersion(), status.apiVersion(), status.compatible(), status.detail());
     }
