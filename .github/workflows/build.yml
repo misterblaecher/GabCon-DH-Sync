@@ -13,6 +13,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Analyze DH test database (read-only metadata)
+        if: ${{ hashFiles('test-data/dh/DistantHorizons-GabCon-test.zip') != '' }}
+        run: python3 scripts/analyze_dh_sqlite.py test-data/dh/DistantHorizons-GabCon-test.zip
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
