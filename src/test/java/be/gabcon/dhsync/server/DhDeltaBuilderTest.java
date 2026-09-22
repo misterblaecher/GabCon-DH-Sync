@@ -133,6 +133,20 @@ class DhDeltaBuilderTest {
                         PRIMARY KEY(BlockPosX,BlockPosY,BlockPosZ)
                     )
                     """);
+            c.createStatement().execute("""
+                    CREATE TABLE Legacy_FullData_V1(
+                        DhSectionPos TEXT NOT NULL PRIMARY KEY,
+                        MigrationFailed INTEGER NOT NULL DEFAULT 0
+                    )
+                    """);
+            c.createStatement().execute("""
+                    CREATE TABLE Schema(
+                        SchemaVersionId INTEGER PRIMARY KEY NOT NULL,
+                        ScriptName TEXT NOT NULL UNIQUE,
+                        AppliedDateTime TEXT NOT NULL
+                    )
+                    """);
+            c.createStatement().execute("INSERT INTO Schema VALUES (1,'test-schema','2026-09-22T00:00:00Z')");
         }
     }
 
