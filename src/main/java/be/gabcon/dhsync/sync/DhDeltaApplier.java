@@ -291,7 +291,7 @@ public final class DhDeltaApplier {
     }
 
     private static String qident(String value) {
-        return """ + value.replace(""", """") + """;
+        return "\"" + value.replace("\"", "\"\"") + "\"";
     }
 
     private static String sqliteQuote(String value) {
