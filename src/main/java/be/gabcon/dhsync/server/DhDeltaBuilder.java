@@ -93,7 +93,7 @@ public final class DhDeltaBuilder {
 
             String deltaName = DhSnapshotService.safeStem(dimension) + ".delta.sqlite";
             Path deltaDb = deltaRoot.resolve(deltaName);
-            List<TableStats> stats = buildDimensionDelta(oldDb, newDb, deltaDb);
+            List<TableStats> stats = buildDimensionDelta(oldDb, newDb, deltaDb, older.sha256(), newer.sha256());
 
             long operations = stats.stream().mapToLong(s -> s.upserts() + s.deletes()).sum();
             if (operations == 0) {
@@ -130,7 +130,7 @@ public final class DhDeltaBuilder {
         return new DeltaResult(deltaRoot, manifestPath, List.copyOf(deltaFiles));
     }
 
-    private static List<TableStats> buildDimensionDelta(Path oldDb, Path newDb, Path output) throws Exception {
+    private static List<TableStats> buildDimensionDelta(Path oldDb, Path newDb, Path output, String oldSha256, String newSha256) throws Exception {
         Files.createDirectories(output.getParent());
         Path part = output.resolveSibling(output.getFileName() + ".part");
         Files.deleteIfExists(part);
@@ -148,8 +148,8 @@ public final class DhDeltaBuilder {
 
                 statement.execute("CREATE TABLE DeltaMeta (Key TEXT PRIMARY KEY NOT NULL, Value TEXT NOT NULL)");
                 statement.execute("INSERT INTO DeltaMeta VALUES ('format','gabcon-dh-delta-v1')");
-                statement.execute("INSERT INTO DeltaMeta VALUES ('oldSha256','" + Hashes.sha256(oldDb) + "')");
-                statement.execute("INSERT INTO DeltaMeta VALUES ('newSha256','" + Hashes.sha256(newDb) + "')");
+                statement.execute("INSERT INTO DeltaMeta VALUES ('oldSha256','" + sqliteQuote(oldSha256) + "')");
+                statement.execute("INSERT INTO DeltaMeta VALUES ('newSha256','" + sqliteQuote(newSha256) + "')");
 
                 for (String table : DATA_TABLES) {
                     stats.add(diffTable(conn, statement, table));
