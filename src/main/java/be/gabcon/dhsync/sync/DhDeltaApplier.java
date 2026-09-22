@@ -90,7 +90,7 @@ public final class DhDeltaApplier {
         Path parent = target.getParent();
         String base = target.getFileName().toString();
         Path work = parent.resolve(base + ".gabcon-work");
-        Path rollback = parent.resolve(base + ".gabcon-rollback-" + STAMP.format(Instant.now()));
+        Path rollback = uniqueRollbackPath(parent, base);
         Files.deleteIfExists(work);
 
         try {
@@ -307,6 +307,17 @@ public final class DhDeltaApplier {
                     "Target DH database appears active or uncheckpointed; close DH/Minecraft before applying a delta"
             );
         }
+    }
+
+    private static Path uniqueRollbackPath(Path parent, String base) throws IOException {
+        String prefix = base + ".gabcon-rollback-" + STAMP.format(Instant.now());
+        Path candidate = parent.resolve(prefix);
+        if (!Files.exists(candidate)) return candidate;
+        for (int suffix = 2; suffix <= 10_000; suffix++) {
+            candidate = parent.resolve(prefix + "-" + suffix);
+            if (!Files.exists(candidate)) return candidate;
+        }
+        throw new IOException("Unable to allocate unique rollback path for " + base);
     }
 
     private static void createRollbackCopy(Path source, Path rollback) throws Exception {
