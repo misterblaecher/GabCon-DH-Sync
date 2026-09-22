@@ -3,6 +3,7 @@ package be.gabcon.dhsync.command;
 import be.gabcon.dhsync.GabConDhSync;
 import be.gabcon.dhsync.config.ServerConfig;
 import be.gabcon.dhsync.server.DhCompatibility;
+import be.gabcon.dhsync.server.DhDeltaBuilder;
 import be.gabcon.dhsync.server.DhSnapshotService;
 import be.gabcon.dhsync.server.ServerState;
 import com.mojang.brigadier.CommandDispatcher;
@@ -18,6 +19,7 @@ public final class GabConCommands {
                 .requires(source -> source.hasPermission(2))
                 .then(Commands.literal("status").executes(ctx -> status(ctx.getSource())))
                 .then(Commands.literal("snapshot").executes(ctx -> snapshot(ctx.getSource())))
+                .then(Commands.literal("delta").executes(ctx -> delta(ctx.getSource())))
                 .then(Commands.literal("publish").executes(ctx -> blockedPublish(ctx.getSource())))
                 .then(Commands.literal("reload").executes(ctx -> reload(ctx.getSource()))));
     }
@@ -28,6 +30,7 @@ public final class GabConCommands {
                 + ", worldId=" + ServerConfig.WORLD_ID.get()
                 + ", pendingBuckets=" + ServerState.CHANGED_REGIONS.pendingCount()
                 + ", snapshotRunning=" + ServerState.SNAPSHOT_RUNNING.get()
+                + ", deltaRunning=" + ServerState.DELTA_RUNNING.get()
                 + ", DH=" + dh.modVersion()
                 + ", API=" + dh.apiVersion()
                 + ", compatible=" + dh.compatible()), false);
@@ -47,8 +50,8 @@ public final class GabConCommands {
             return 0;
         }
 
-        if (!ServerState.SNAPSHOT_RUNNING.compareAndSet(false, true)) {
-            source.sendFailure(Component.literal("[GabConDHSync] A snapshot is already running."));
+        if (ServerState.DELTA_RUNNING.get() || !ServerState.SNAPSHOT_RUNNING.compareAndSet(false, true)) {
+            source.sendFailure(Component.literal("[GabConDHSync] Another maintenance operation is already running."));
             return 0;
         }
 
@@ -68,14 +71,51 @@ public final class GabConCommands {
             } finally {
                 ServerState.SNAPSHOT_RUNNING.set(false);
             }
-        }, ServerState.SNAPSHOT_EXECUTOR);
+        }, ServerState.MAINTENANCE_EXECUTOR);
+
+        return 1;
+    }
+
+    private static int delta(CommandSourceStack source) {
+        if (!ServerConfig.ENABLED.get()) {
+            source.sendFailure(Component.literal("[GabConDHSync] Delta refused: mod is disabled."));
+            return 0;
+        }
+
+        if (ServerState.SNAPSHOT_RUNNING.get() || !ServerState.DELTA_RUNNING.compareAndSet(false, true)) {
+            source.sendFailure(Component.literal("[GabConDHSync] Another maintenance operation is already running."));
+            return 0;
+        }
+
+        source.sendSuccess(() -> Component.literal("[GabConDHSync] Comparing the two latest snapshots. This can take several minutes for a large Overworld..."), false);
+
+        CompletableFuture.runAsync(() -> {
+            try {
+                DhDeltaBuilder.DeltaResult result = DhDeltaBuilder.buildLatest(ServerConfig.WORLD_ID.get());
+                long operations = result.files().stream()
+                        .flatMap(file -> file.tables().stream())
+                        .mapToLong(table -> table.upserts() + table.deletes())
+                        .sum();
+                source.getServer().execute(() -> source.sendSuccess(
+                        () -> Component.literal("[GabConDHSync] Delta complete: " + result.files().size()
+                                + " changed dimension(s), " + operations
+                                + " row operation(s), manifest=" + result.manifest()), false));
+            } catch (Exception e) {
+                GabConDhSync.LOGGER.error("[GabConDHSync] Delta generation failed", e);
+                source.getServer().execute(() -> source.sendFailure(
+                        Component.literal("[GabConDHSync] Delta failed safely: "
+                                + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()))));
+            } finally {
+                ServerState.DELTA_RUNNING.set(false);
+            }
+        }, ServerState.MAINTENANCE_EXECUTOR);
 
         return 1;
     }
 
     private static int blockedPublish(CommandSourceStack source) {
         source.sendFailure(Component.literal("[GabConDHSync] publish is still intentionally disabled: "
-                + "snapshot is now safe, but delta packaging/client offline import must be validated before GitHub publication."));
+                + "delta packaging is now available, but client offline transactional import must be validated before GitHub publication."));
         return 0;
     }
 
