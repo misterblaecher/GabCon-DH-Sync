@@ -1,1 +1,189 @@
-# GabCon-DH-Sync
+# GabCon DH Sync
+
+Mod **NeoForge 1.21.1 / Java 21** destiné à réduire le trafic Distant Horizons servi directement par un serveur Minecraft domestique en préparant une distribution externe par **GitHub Releases**.
+
+> **État : MVP de sécurité / architecture.** Cette branche ne prétend pas encore importer ni publier des LOD Distant Horizons. Elle met en place les briques sûres (manifest, deltas, téléchargement, vérification, suivi serveur, CI) et **refuse explicitement** toute copie/modification naïve de `DistantHorizons.sqlite` pendant que DH tourne.
+
+## Cible testée
+
+- Minecraft Java Edition `1.21.1`
+- NeoForge `21.1.251`
+- Java `21`
+- Distant Horizons `3.3.1` (`DistantHorizons-3.3.1-1.21.1-fabric-neoforge.jar`)
+- API DH embarquée dans ce JAR : `7.1.0`
+
+Le même JAR GabCon DH Sync est prévu pour le client et le serveur. Distant Horizons n'est **pas** embarqué dans le JAR GabCon.
+
+## Ce qui a été vérifié dans DH 3.3.1
+
+L'analyse du JAR exact fourni a confirmé les points suivants :
+
+1. `DhApi.getApiMajorVersion()/Minor/Patch()` retourne `7.1.0`.
+2. L'API publique expose `IDhApiTerrainDataRepo.overwriteChunkDataAsync(...)`, mais cette méthode accepte des objets chunks Minecraft via le wrapper DH ; ce n'est pas une API générique d'import de données LOD sérialisées.
+3. DH possède en interne un chemin réseau basé notamment sur `FullDataSourceResponseMessage` / `FullDataSourceV2DTO` capable de fusionner des données LOD, mais ces classes ne font pas partie de l'API publique et le MVP ne les utilise pas.
+4. Le stockage courant utilise `DistantHorizons.sqlite`; les migrations embarquées activent le mode SQLite **WAL**. Une copie brute de la DB active n'est donc pas considérée comme un snapshot cohérent.
+5. Aucune API publique vérifiée n'a été trouvée pour fermer/checkpointer/exporter puis réimporter un snapshot LOD sérialisé en sécurité.
+
+Conséquence : la première implémentation préfère **refuser** `snapshot`/`publish` plutôt que de risquer de corrompre une DB. L'étape suivante doit soit obtenir/valider un chemin d'import officiel DH, soit construire un format contrôlé et testable à partir d'une DB de test hors ligne.
+
+## Architecture du MVP
+
+### Serveur — source de vérité
+
+GabCon écoute `ChunkDataEvent.Save` de NeoForge. Chaque sauvegarde de chunk est regroupée dans un **bucket de publication 32×32 chunks** : ce regroupement sert uniquement à la file de publication et ne suppose rien sur la géométrie de stockage interne de DH.
+
+Les dimensions sont identifiées par leur ResourceLocation (`minecraft:overworld`, `minecraft:the_nether`, `minecraft:the_end`, dimensions moddées).
+
+### Manifest
+
+Schéma `1` :
+
+```json
+{
+  "schemaVersion": 1,
+  "worldId": "gabcon-world-01",
+  "minecraftVersion": "1.21.1",
+  "neoforgeVersion": "21.1.251",
+  "distantHorizonsVersion": "3.3.1",
+  "baseVersion": 1,
+  "latestDelta": 128,
+  "dimensions": {
+    "minecraft:overworld": {
+      "bootstrap": {
+        "version": 1,
+        "fileName": "overworld-base-v1.gcdh",
+        "size": 123456789,
+        "sha256": "<64 hex>",
+        "url": "https://github.com/.../overworld-base-v1.gcdh",
+        "requiresBaseVersion": 1
+      },
+      "deltas": []
+    }
+  }
+}
+```
+
+Validation actuelle : version de schéma, `worldId`, HTTPS uniquement, taille, SHA‑256, nom de fichier sûr, ordre/duplication des deltas et dépendance à la base.
+
+### Sélection différentielle
+
+Si le client possède `baseVersion=1` et `lastDelta=124`, et le manifest va jusqu'à `128`, la sélection retient uniquement `125..128`. Si la version de base diffère, le bootstrap est repris avant les deltas.
+
+### Download manager
+
+Déjà implémenté :
+
+- asynchrone hors thread graphique ;
+- HTTPS uniquement en production ;
+- `.part` ;
+- reprise HTTP `Range` ;
+- fallback sûr si le serveur ignore `Range` ;
+- timeout et retries bornés ;
+- limite de taille ;
+- taille finale attendue ;
+- SHA‑256 ;
+- remplacement atomique lorsque le système de fichiers le permet ;
+- nettoyage d'un `.part` dont le hash est faux ;
+- protection contre path traversal dans les noms d'assets ;
+- progression, vitesse et ETA exposées à la future GUI.
+
+## Commandes
+
+```text
+/gabcondhsync status
+/gabcondhsync snapshot
+/gabcondhsync publish
+/gabcondhsync reload
+```
+
+`status` affiche notamment le nombre de buckets en attente et la paire DH/API détectée.
+
+Dans ce MVP, `snapshot` et `publish` **échouent volontairement avec un message explicite**. Ils ne copient ni ne modifient la base DH active.
+
+## Configuration
+
+### Serveur
+
+Fichier NeoForge serveur généré pour le mod :
+
+- `enabled`
+- `repository`
+- `worldId` — **à changer** depuis `CHANGE_ME` avant toute future publication
+- `publishIntervalMinutes`
+- `changedRegionThreshold`
+- `nativeDhFallbackEnabled`
+- `autoPublish`
+- `maxDownloadBytes`
+
+`autoPublish` est ignoré par sécurité tant que l'adaptateur de snapshot n'est pas disponible.
+
+### Client
+
+- `enabled`
+- `autoDownload`
+- `connectOnComplete`
+- `allowFallback`
+- `maxConcurrentDownloads`
+- `optionalDownloadSpeedLimit`
+
+La GUI et l'interception de connexion seront branchées lorsque le format/import LOD aura été validé.
+
+## Sécurité GitHub
+
+- aucun PAT/token dans le client ;
+- aucun token dans le dépôt ;
+- le futur publisher serveur lira `GABCON_DH_GITHUB_TOKEN` depuis l'environnement ;
+- ce token devra être limité à ce dépôt ;
+- les clients téléchargeront des assets publics GitHub Releases sans token.
+
+Le code Git contient le code, la CI, les schémas/manifests et la documentation. Les grosses bases/archives DH doivent aller dans **GitHub Releases**, jamais dans l'historique Git.
+
+## Build
+
+Windows :
+
+```powershell
+.\gradlew.bat build
+```
+
+Linux/macOS :
+
+```bash
+./gradlew build
+```
+
+Le JAR est généré dans `build/libs/`.
+
+## Tests présents
+
+- parsing/validation manifest ;
+- mauvaise `worldId` ;
+- version de schéma/migration non prise en charge ;
+- sélection de deltas ;
+- client déjà à jour ;
+- SHA‑256 ;
+- path traversal ;
+- reprise d'un `.part` par HTTP Range ;
+- hash incorrect ;
+- téléchargement incomplet conservé pour reprise ;
+- regroupement de chunks avec coordonnées négatives.
+
+## CI / Releases
+
+`.github/workflows/build.yml` lance Java 21 + `./gradlew build` sur push/PR et publie le JAR comme artifact GitHub Actions.
+
+`.github/workflows/release.yml` construit et crée une GitHub Release lors d'un tag `v*` avec le `GITHUB_TOKEN` éphémère de GitHub Actions. Aucun secret client n'est requis.
+
+## Étape DH suivante (expérimentale)
+
+Avant d'activer la vraie synchronisation LOD :
+
+1. fournir une **petite copie de test** de `DistantHorizons.sqlite` et, si présents au moment de la copie, les fichiers `-wal` / `-shm` ;
+2. ne pas utiliser la DB active de production pour les essais ;
+3. valider le schéma exact et le comportement de merge sur cette DB ;
+4. tester un mécanisme de snapshot cohérent (API officielle si disponible, sinon mécanisme SQLite explicitement coordonné) ;
+5. seulement ensuite connecter le download manager à une GUI et à l'import automatique avant connexion.
+
+## Récupération / rollback
+
+Le MVP ne modifie pas les DB DH, donc sa désinstallation consiste simplement à retirer son JAR. Pour les futures versions qui importeront des données, la règle de conception est : fichier temporaire, vérification complète, sauvegarde/rollback documenté et aucune tentative de "forcer" un manifest ou un `worldId` incompatible.
