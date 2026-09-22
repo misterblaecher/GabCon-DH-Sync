@@ -2,7 +2,7 @@
 
 Mod **NeoForge 1.21.1 / Java 21** destiné à réduire le trafic Distant Horizons servi directement par un serveur Minecraft domestique en préparant une distribution externe par **GitHub Releases**.
 
-> **État : MVP snapshot sûr.** Le serveur sait maintenant créer un snapshot SQLite cohérent de chaque DB DH chargée via l'API publique DH + l'API SQLite backup embarquée par DH. La publication GitHub et l'import différentiel côté client restent désactivés tant que le round-trip n'a pas été validé.
+> **État : MVP snapshot + delta.** Le serveur sait créer des snapshots SQLite cohérents puis comparer les deux derniers snapshots pour produire un delta logique exact (upserts + suppressions) sans décoder les BLOB Distant Horizons. La publication GitHub et l'import transactionnel côté client restent désactivés tant que le round-trip n'a pas été validé.
 
 ## Cible testée
 
@@ -109,15 +109,20 @@ Déjà implémenté :
 ```text
 /gabcondhsync status
 /gabcondhsync snapshot
+/gabcondhsync delta
 /gabcondhsync publish
 /gabcondhsync reload
 ```
 
-`status` affiche notamment le nombre de buckets en attente, l'état d'un éventuel snapshot et la paire DH/API détectée.
+`status` affiche notamment le nombre de buckets en attente, `snapshotRunning`, `deltaRunning` et la paire DH/API détectée.
 
 `/gabcondhsync snapshot` est **actif**. Il met temporairement DH en lecture seule via l'API publique, crée une copie cohérente avec le backup SQLite en ligne, vérifie chaque DB et écrit un `snapshot.json`. Les fichiers sont placés sous `gabcondhsync/snapshots/<worldId>/<timestamp UTC>/`.
 
-`/gabcondhsync publish` reste volontairement désactivé tant que le packaging delta et l'import hors ligne côté client ne sont pas validés.
+`/gabcondhsync delta` est **actif**. Il choisit les deux snapshots valides les plus récents de `gabcondhsync/snapshots/<worldId>/`, exige le même `worldId`, la même version DH/API et le même schéma SQLite, puis compare les tables `FullData`, `ChunkHash` et `BeaconBeam`. Pour chaque dimension réellement modifiée il crée un SQLite de delta sous `gabcondhsync/deltas/<worldId>/<from>--<to>/`.
+
+Chaque delta contient des tables `<Table>Upsert` avec les lignes ajoutées/modifiées et `<Table>Delete` avec uniquement les clés primaires à supprimer. Les BLOB DH sont copiés octet pour octet : GabCon ne les décode ni ne les réencode. `Legacy_FullData_V1` doit être vide et la table `Schema` doit être identique entre les deux snapshots, sinon le delta est refusé.
+
+`/gabcondhsync publish` reste volontairement désactivé tant que l'import hors ligne transactionnel côté client n'est pas validé.
 
 ## Configuration
 
@@ -189,7 +194,11 @@ Le JAR est généré dans `build/libs/`.
 - backup SQLite en ligne via un shim `dh_sqlite` de test ;
 - `PRAGMA quick_check` sur le snapshot ;
 - normalisation sûre des noms de dimensions ;
-- analyse CI en lecture seule de la DB DH de test réelle.
+- analyse CI en lecture seule de la DB DH de test réelle ;
+- génération de deltas SQLite avec upserts/suppressions ;
+- comparaison null-safe des colonnes, BLOB compris ;
+- refus si le schéma DH diffère ou si des données legacy subsistent ;
+- cas où deux snapshots ont des hashes physiques différents mais zéro différence logique.
 
 ## CI / Releases
 
@@ -199,13 +208,15 @@ Le JAR est généré dans `build/libs/`.
 
 ## Étape DH suivante (expérimentale)
 
-Le prochain jalon est un test réel de `/gabcondhsync snapshot` sur le serveur avec DH 3.3.2. Après validation :
+Le prochain jalon est le test réel de `/gabcondhsync delta` sur les deux snapshots GabCon déjà produits. Le résultat permettra de mesurer combien de **lignes logiques** ont réellement changé, indépendamment des différences physiques de pages SQLite.
 
-1. comparer deux snapshots successifs pour produire un delta exact par clés primaires ;
-2. inclure les upserts **et** les suppressions afin de ne pas supposer que DH ne supprime jamais de lignes ;
-3. appliquer ce delta uniquement sur une DB client fermée, dans une transaction avec sauvegarde/rollback ;
-4. vérifier `quick_check`, SHA-256, `worldId=gabcon-main` et compatibilité DH avant remplacement ;
-5. seulement ensuite activer `publish`, GitHub Releases et l'interception de connexion client.
+Après validation du `delta.json` :
+
+1. implémenter l'importeur client hors ligne dans une copie temporaire de la DB ;
+2. appliquer les suppressions puis les upserts dans une transaction ;
+3. exécuter `PRAGMA quick_check` et vérifier SHA-256 / `worldId=gabcon-main` / compatibilité DH ;
+4. conserver un rollback avant remplacement atomique de la DB client ;
+5. ensuite seulement activer `publish`, GitHub Releases, bootstrap segmenté et interception de connexion client.
 
 ## Validation serveur réelle du snapshot
 
@@ -217,6 +228,8 @@ Le premier snapshot réel du serveur GabCon avec DH 3.3.2 a produit :
 - Nether et End ont le même SHA-256 dans ce snapshot, ce qui indique des bases identiques à ce stade.
 
 Le manifest a été produit après le backup SQLite et les `quick_check`, donc les trois snapshots ont franchi la validation locale de GabCon.
+
+Un second snapshot réel a ensuite été créé à `2026-09-22T14:15:55Z`. Sa taille Overworld reste exactement `10,406,621,184` octets, mais son SHA-256 passe de `be76254f…d1104c` à `5e38fd6f…0d3bd`. Nether et End sont inchangés. Cela confirme qu'un hash de fichier détecte une évolution physique, mais **ne dit pas combien de lignes DH ont changé** ; le générateur de delta logique sert précisément à répondre à cette question.
 
 ### Conséquence pour GitHub Releases
 
