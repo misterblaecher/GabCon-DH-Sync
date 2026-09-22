@@ -22,7 +22,7 @@ public final class ServerConfig {
         PUBLISH_INTERVAL_MINUTES = b.defineInRange("publishIntervalMinutes", 30, 1, 1440);
         CHANGED_REGION_THRESHOLD = b.defineInRange("changedRegionThreshold", 32, 1, 100000);
         NATIVE_DH_FALLBACK_ENABLED = b.define("nativeDhFallbackEnabled", true);
-        AUTO_PUBLISH = b.comment("Ignored while the safe DH snapshot adapter is not implemented.").define("autoPublish", false);
+        AUTO_PUBLISH = b.comment("Ignored while GitHub publishing and client offline import are not yet validated.").define("autoPublish", false);
         MAX_DOWNLOAD_BYTES = b.defineInRange("maxDownloadBytes", 2L * 1024 * 1024 * 1024, 1L, Long.MAX_VALUE);
         b.pop();
         SPEC = b.build();
