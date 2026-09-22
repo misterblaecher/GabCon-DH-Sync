@@ -253,6 +253,24 @@ Le premier delta réel entre les snapshots `14:01:32Z` et `14:15:55Z` contient u
 
 Cela représente environ **0,35 %** de la taille du snapshot Overworld complet et valide le principe de distribution différentielle.
 
+### Validation du vrai fichier delta
+
+Le fichier réel `minecraft_overworld.delta.sqlite` produit par le serveur a été vérifié hors ligne :
+
+- taille : `35 909 632` octets ;
+- SHA-256 : `d2d48447d518998ccfc9b4991cfdea4298c58a52c68e1baae0d38785ba9ddd24` ;
+- `PRAGMA quick_check = ok` ;
+- format : `gabcon-dh-delta-v1` ;
+- baseline serveur source : `be76254f870c223d3052e690ecb7af47e1420ecde3a125e213e8592ef3d1104c` ;
+- baseline serveur cible : `5e38fd6f0a18f115413d9ea420aa0205088765d2220939c4bd3e97ea1fa0d3bd` ;
+- `FullDataUpsert` : 938 lignes, `FullDataDelete` : 0 ;
+- `ChunkHashUpsert` : 3 702 lignes, `ChunkHashDelete` : 0 ;
+- `BeaconBeamUpsert/Delete` : 0 ;
+- aucune clé primaire dupliquée ni clé primaire NULL dans les tables non vides ;
+- les 938 lignes `FullData` utilisent `DataFormatVersion=2` et `CompressionMode=4`.
+
+Le fichier est donc structurellement compatible avec `DhDeltaApplier` 0.4.0-mvp.
+
 ### Conséquence pour GitHub Releases
 
 GitHub impose que chaque asset de release fasse moins de 2 GiB. L'Overworld de plus de 10 Go ne peut donc jamais être envoyé comme un unique fichier.
