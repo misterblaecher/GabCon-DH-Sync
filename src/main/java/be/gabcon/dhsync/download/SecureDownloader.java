@@ -51,6 +51,15 @@ public final class SecureDownloader {
         Path finalPath = SafePaths.resolveAsset(request.targetDirectory(), request.fileName());
         Path partPath = finalPath.resolveSibling(finalPath.getFileName() + ".part");
 
+        if (Files.exists(partPath) && Files.size(partPath) == request.expectedSize()) {
+            String hash = Hashes.sha256(partPath);
+            if (hash.equalsIgnoreCase(request.expectedSha256())) {
+                atomicReplace(partPath, finalPath);
+                return finalPath;
+            }
+            Files.deleteIfExists(partPath);
+        }
+
         IOException last = null;
         for (int attempt = 1; attempt <= 3; attempt++) {
             try {
