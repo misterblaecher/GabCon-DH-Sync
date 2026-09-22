@@ -207,6 +207,25 @@ Le prochain jalon est un test réel de `/gabcondhsync snapshot` sur le serveur a
 4. vérifier `quick_check`, SHA-256, `worldId=gabcon-main` et compatibilité DH avant remplacement ;
 5. seulement ensuite activer `publish`, GitHub Releases et l'interception de connexion client.
 
+## Validation serveur réelle du snapshot
+
+Le premier snapshot réel du serveur GabCon avec DH 3.3.2 a produit :
+
+- `minecraft:overworld` : `10,406,621,184` octets ;
+- `minecraft:the_nether` : `61,440` octets ;
+- `minecraft:the_end` : `61,440` octets ;
+- Nether et End ont le même SHA-256 dans ce snapshot, ce qui indique des bases identiques à ce stade.
+
+Le manifest a été produit après le backup SQLite et les `quick_check`, donc les trois snapshots ont franchi la validation locale de GabCon.
+
+### Conséquence pour GitHub Releases
+
+GitHub impose que chaque asset de release fasse moins de 2 GiB. L'Overworld de plus de 10 Go ne peut donc jamais être envoyé comme un unique fichier.
+
+Le futur bootstrap sera **segmenté** en morceaux nettement inférieurs à 2 GiB, chacun avec taille + SHA-256 dans le manifest. Le client reconstruira le fichier dans un emplacement temporaire, validera le SHA-256 du fichier complet, puis seulement l'utilisera. Les deltas resteront des assets séparés et beaucoup plus petits.
+
+Les grosses DB/snapshots ne doivent jamais être ajoutés à l'historique Git.
+
 ## Récupération / rollback
 
 Le MVP ne modifie pas les DB DH, donc sa désinstallation consiste simplement à retirer son JAR. Pour les futures versions qui importeront des données, la règle de conception est : fichier temporaire, vérification complète, sauvegarde/rollback documenté et aucune tentative de "forcer" un manifest ou un `worldId` incompatible.
