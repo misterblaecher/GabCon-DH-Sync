@@ -60,6 +60,53 @@ class DhDeltaRoundTripTest {
         }
     }
 
+
+    @Test
+    void appliesASecondDeltaUsingTheServerBaselineChain() throws Exception {
+        Class.forName("org.sqlite.JDBC");
+
+        Path oldDir = temp.resolve("chain-old");
+        Path midDir = temp.resolve("chain-mid");
+        Path newDir = temp.resolve("chain-new");
+        Files.createDirectories(oldDir);
+        Files.createDirectories(midDir);
+        Files.createDirectories(newDir);
+
+        Path oldDb = oldDir.resolve("minecraft_overworld.sqlite");
+        Path midDb = midDir.resolve("minecraft_overworld.sqlite");
+        Path newDb = newDir.resolve("minecraft_overworld.sqlite");
+        createDhSchema(oldDb);
+        createDhSchema(midDb);
+        createDhSchema(newDb);
+        seedOld(oldDb);
+        seedNew(midDb);
+        seedFinal(newDb);
+
+        writeManifest(oldDir, "2026-09-22T14:01:32Z", oldDb);
+        writeManifest(midDir, "2026-09-22T14:15:55Z", midDb);
+        writeManifest(newDir, "2026-09-22T14:30:00Z", newDb);
+
+        var delta1 = DhDeltaBuilder.build(oldDir, midDir, "gabcon-main", temp.resolve("chain-delta-1"));
+        var delta2 = DhDeltaBuilder.build(midDir, newDir, "gabcon-main", temp.resolve("chain-delta-2"));
+
+        Path clientDb = temp.resolve("chain-client.sqlite");
+        Files.copy(oldDb, clientDb);
+
+        var first = DhDeltaApplier.applyOffline(
+                clientDb,
+                delta1.directory().resolve(delta1.files().getFirst().fileName())
+        );
+        assertEquals(Hashes.sha256(midDb), first.nextServerBaselineSha256());
+
+        var second = DhDeltaApplier.applyOfflineChained(
+                clientDb,
+                delta2.directory().resolve(delta2.files().getFirst().fileName()),
+                first.nextServerBaselineSha256()
+        );
+        assertEquals(Hashes.sha256(newDb), second.nextServerBaselineSha256());
+        assertSemanticEquality(clientDb, newDb);
+    }
+
     @Test
     void refusesWrongPhysicalBaselineBeforeChangingTarget() throws Exception {
         Class.forName("org.sqlite.JDBC");
@@ -171,6 +218,19 @@ class DhDeltaRoundTripTest {
             c.createStatement().execute("INSERT INTO FullData VALUES (0,2,2,0,21,X'99',200,50)");
             c.createStatement().execute("INSERT INTO FullData VALUES (0,4,4,0,40,X'04',200,200)");
             c.createStatement().execute("INSERT INTO ChunkHash VALUES (1,1,111,100,50)");
+            c.createStatement().execute("INSERT INTO ChunkHash VALUES (3,3,333,200,200)");
+            c.createStatement().execute("INSERT INTO BeaconBeam VALUES (1,64,1,0,255,0,200,50)");
+        }
+    }
+
+
+    private static void seedFinal(Path db) throws Exception {
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+            c.createStatement().execute("INSERT INTO FullData VALUES (0,1,1,0,10,X'01',100,50)");
+            c.createStatement().execute("INSERT INTO FullData VALUES (0,2,2,0,22,X'AA',300,50)");
+            c.createStatement().execute("INSERT INTO FullData VALUES (0,4,4,0,40,X'04',200,200)");
+            c.createStatement().execute("INSERT INTO FullData VALUES (0,5,5,0,50,X'05',300,300)");
+            c.createStatement().execute("INSERT INTO ChunkHash VALUES (1,1,112,300,50)");
             c.createStatement().execute("INSERT INTO ChunkHash VALUES (3,3,333,200,200)");
             c.createStatement().execute("INSERT INTO BeaconBeam VALUES (1,64,1,0,255,0,200,50)");
         }
