@@ -2,7 +2,7 @@
 
 Mod **NeoForge 1.21.1 / Java 21** destiné à réduire le trafic Distant Horizons servi directement par un serveur Minecraft domestique en préparant une distribution externe par **GitHub Releases**.
 
-> **État : MVP snapshot + delta.** Le serveur sait créer des snapshots SQLite cohérents puis comparer les deux derniers snapshots pour produire un delta logique exact (upserts + suppressions) sans décoder les BLOB Distant Horizons. La publication GitHub et l'import transactionnel côté client restent désactivés tant que le round-trip n'a pas été validé.
+> **État : MVP snapshot + delta + apply hors ligne.** Le serveur sait créer des snapshots SQLite cohérents et des deltas logiques exacts. Le cœur d'import sait maintenant appliquer un delta hors ligne dans une copie de travail, avec transaction, rollback et `quick_check`. L'intégration automatique au flux de connexion Minecraft et la publication GitHub restent désactivées tant que le test réel côté client n'a pas été fait.
 
 ## Cible testée
 
@@ -124,6 +124,12 @@ Chaque delta contient des tables `<Table>Upsert` avec les lignes ajoutées/modif
 
 `/gabcondhsync publish` reste volontairement désactivé tant que l'import hors ligne transactionnel côté client n'est pas validé.
 
+### Importeur hors ligne
+
+`DhDeltaApplier` applique un fichier `*.delta.sqlite` uniquement sur une DB DH fermée. Il refuse les sidecars actifs `-wal/-shm`, vérifie la DB cible et le delta avec `PRAGMA quick_check`, travaille sur une copie, applique suppressions puis upserts dans une transaction, crée un rollback vérifié avant remplacement et effectue un dernier `quick_check` après remplacement.
+
+Le premier delta après bootstrap peut exiger le SHA-256 physique exact du snapshot de base. Pour les deltas suivants, GabCon utilise une **chaîne de baseline serveur** `oldServerSha -> newServerSha` : les bytes physiques d'un SQLite peuvent changer après backup/apply sans changement logique, donc le hash du fichier client ne doit pas être utilisé comme identité logique permanente.
+
 ## Configuration
 
 ### Serveur
@@ -198,7 +204,11 @@ Le JAR est généré dans `build/libs/`.
 - génération de deltas SQLite avec upserts/suppressions ;
 - comparaison null-safe des colonnes, BLOB compris ;
 - refus si le schéma DH diffère ou si des données legacy subsistent ;
-- cas où deux snapshots ont des hashes physiques différents mais zéro différence logique.
+- cas où deux snapshots ont des hashes physiques différents mais zéro différence logique ;
+- round-trip `ancien snapshot + delta = nouveau snapshot` par comparaison SQL bidirectionnelle ;
+- rollback logique identique à l'ancienne DB ;
+- refus d'une mauvaise baseline physique ;
+- chaîne de deux deltas successifs via le token de baseline serveur.
 
 ## CI / Releases
 
@@ -208,15 +218,15 @@ Le JAR est généré dans `build/libs/`.
 
 ## Étape DH suivante (expérimentale)
 
-Le prochain jalon est le test réel de `/gabcondhsync delta` sur les deux snapshots GabCon déjà produits. Le résultat permettra de mesurer combien de **lignes logiques** ont réellement changé, indépendamment des différences physiques de pages SQLite.
+Le delta réel a été validé côté serveur : **4 640 opérations logiques** pour un fichier de **35 909 632 octets**, contre une DB Overworld de 10 406 621 184 octets.
 
-Après validation du `delta.json` :
+La prochaine validation est côté client/offline :
 
-1. implémenter l'importeur client hors ligne dans une copie temporaire de la DB ;
-2. appliquer les suppressions puis les upserts dans une transaction ;
-3. exécuter `PRAGMA quick_check` et vérifier SHA-256 / `worldId=gabcon-main` / compatibilité DH ;
-4. conserver un rollback avant remplacement atomique de la DB client ;
-5. ensuite seulement activer `publish`, GitHub Releases, bootstrap segmenté et interception de connexion client.
+1. tester le vrai `minecraft_overworld.delta.sqlite` de 35,9 Mo sur une **copie** du premier snapshot Overworld ;
+2. vérifier que la DB obtenue est logiquement identique au deuxième snapshot sur `FullData`, `ChunkHash`, `BeaconBeam` et `Schema` ;
+3. seulement après ce test, brancher l'applier sur la détection du serveur `gabcon-main` avant connexion ;
+4. ajouter le fichier d'état client pour chaîner plusieurs deltas sans dépendre du hash physique local SQLite ;
+5. ensuite activer bootstrap segmenté, GitHub Releases puis `publish`.
 
 ## Validation serveur réelle du snapshot
 
@@ -230,6 +240,18 @@ Le premier snapshot réel du serveur GabCon avec DH 3.3.2 a produit :
 Le manifest a été produit après le backup SQLite et les `quick_check`, donc les trois snapshots ont franchi la validation locale de GabCon.
 
 Un second snapshot réel a ensuite été créé à `2026-09-22T14:15:55Z`. Sa taille Overworld reste exactement `10,406,621,184` octets, mais son SHA-256 passe de `be76254f…d1104c` à `5e38fd6f…0d3bd`. Nether et End sont inchangés. Cela confirme qu'un hash de fichier détecte une évolution physique, mais **ne dit pas combien de lignes DH ont changé** ; le générateur de delta logique sert précisément à répondre à cette question.
+
+### Validation réelle du delta
+
+Le premier delta réel entre les snapshots `14:01:32Z` et `14:15:55Z` contient uniquement l'Overworld :
+
+- taille : `35 909 632` octets (~34,3 MiB) ;
+- `FullData` : 938 upserts, 0 suppression ;
+- `ChunkHash` : 3 702 upserts, 0 suppression ;
+- `BeaconBeam` : 0 opération ;
+- total : **4 640 opérations**.
+
+Cela représente environ **0,35 %** de la taille du snapshot Overworld complet et valide le principe de distribution différentielle.
 
 ### Conséquence pour GitHub Releases
 
