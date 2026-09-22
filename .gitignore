@@ -1,0 +1,10 @@
+.gradle/
+build/
+run/
+.idea/
+*.iml
+*.log
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.part
