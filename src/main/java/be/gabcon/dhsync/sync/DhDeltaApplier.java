@@ -32,7 +32,7 @@ public final class DhDeltaApplier {
             Path database,
             Path rollbackBackup,
             long size,
-            String sha256,
+            String nextServerBaselineSha256,
             List<TableApplyStats> tables
     ) {}
 
@@ -57,6 +57,36 @@ public final class DhDeltaApplier {
             );
         }
 
+        return applyVerified(target, delta, meta);
+    }
+
+    public static ApplyResult applyOfflineChained(
+            Path targetDatabase,
+            Path deltaDatabase,
+            String currentServerBaselineSha256
+    ) throws Exception {
+        Path target = targetDatabase.toAbsolutePath().normalize();
+        Path delta = deltaDatabase.toAbsolutePath().normalize();
+
+        requireRegularFile(target, "Target DH database");
+        requireRegularFile(delta, "Delta database");
+        refuseActiveSidecars(target);
+        DhSqliteSnapshotter.verify(target);
+        DhSqliteSnapshotter.verify(delta);
+        requireSha256(currentServerBaselineSha256, "currentServerBaselineSha256");
+
+        DeltaMeta meta = readDeltaMeta(delta);
+        if (!currentServerBaselineSha256.equalsIgnoreCase(meta.oldSha256())) {
+            throw new IllegalStateException(
+                    "Delta chain mismatch: current server baseline "
+                            + currentServerBaselineSha256 + " != expected " + meta.oldSha256()
+            );
+        }
+
+        return applyVerified(target, delta, meta);
+    }
+
+    private static ApplyResult applyVerified(Path target, Path delta, DeltaMeta meta) throws Exception {
         Path parent = target.getParent();
         String base = target.getFileName().toString();
         Path work = parent.resolve(base + ".gabcon-work");
@@ -64,7 +94,9 @@ public final class DhDeltaApplier {
         Files.deleteIfExists(work);
 
         try {
-            DhSqliteSnapshotter.backup(target, work);
+            copyOffline(target, work);
+            DhSqliteSnapshotter.verify(work);
+
             List<TableApplyStats> stats = applyIntoWorkingCopy(work, delta);
             DhSqliteSnapshotter.verify(work);
 
@@ -76,7 +108,7 @@ public final class DhDeltaApplier {
                     target,
                     rollback,
                     Files.size(target),
-                    Hashes.sha256(target),
+                    meta.newSha256(),
                     List.copyOf(stats)
             );
         } catch (Exception e) {
@@ -279,7 +311,17 @@ public final class DhDeltaApplier {
 
     private static void createRollbackCopy(Path source, Path rollback) throws Exception {
         if (Files.exists(rollback)) throw new IOException("Rollback path already exists: " + rollback);
-        DhSqliteSnapshotter.backup(source, rollback);
+        copyOffline(source, rollback);
+        DhSqliteSnapshotter.verify(rollback);
+    }
+
+    private static void copyOffline(Path source, Path destination) throws IOException {
+        Files.copy(
+                source,
+                destination,
+                StandardCopyOption.REPLACE_EXISTING,
+                StandardCopyOption.COPY_ATTRIBUTES
+        );
     }
 
     private static void replaceTarget(Path work, Path target) throws IOException {
