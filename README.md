@@ -2,7 +2,7 @@
 
 Mod **NeoForge 1.21.1 / Java 21** destiné à réduire le trafic Distant Horizons servi directement par un serveur Minecraft domestique en préparant une distribution externe par **GitHub Releases**.
 
-> **État : MVP de sécurité / architecture.** Cette branche ne prétend pas encore importer ni publier des LOD Distant Horizons. Elle met en place les briques sûres (manifest, deltas, téléchargement, vérification, suivi serveur, CI) et **refuse explicitement** toute copie/modification naïve de `DistantHorizons.sqlite` pendant que DH tourne.
+> **État : MVP snapshot sûr.** Le serveur sait maintenant créer un snapshot SQLite cohérent de chaque DB DH chargée via l'API publique DH + l'API SQLite backup embarquée par DH. La publication GitHub et l'import différentiel côté client restent désactivés tant que le round-trip n'a pas été validé.
 
 ## Cible testée
 
@@ -27,7 +27,21 @@ L'analyse du JAR exact 3.3.2 et la comparaison binaire avec le JAR 3.3.1 ont con
 6. DH possède toujours en interne un chemin réseau basé notamment sur `FullDataSourceResponseMessage` / `FullDataSourceV2DTO`, mais ces classes ne font pas partie de l'API publique et le MVP ne les utilise pas.
 7. Aucune nouvelle API publique vérifiée n'a été trouvée pour fermer/checkpointer/exporter puis réimporter un snapshot LOD sérialisé en sécurité.
 
-Conséquence : la première implémentation préfère **refuser** `snapshot`/`publish` plutôt que de risquer de corrompre une DB. L'étape suivante doit soit obtenir/valider un chemin d'import officiel DH, soit construire un format contrôlé et testable à partir d'une DB de test hors ligne.
+Deux API publiques DH 3.3.2 sont en revanche suffisantes pour sécuriser le snapshot serveur : `IDhApiWorldProxy.setReadOnly(...)` permet de geler temporairement les mises à jour LOD et `IDhApiLevelWrapper.getDhSaveFolder()` donne le dossier exact de chaque DB chargée. GabCon utilise ensuite le mécanisme SQLite `backup` du pilote `dh_sqlite` embarqué par DH, vérifie la copie avec `PRAGMA quick_check`, calcule son SHA-256 puis restaure le mode lecture/écriture de DH.
+
+### Base de test GabCon analysée
+
+Le fichier `test-data/dh/DistantHorizons-GabCon-test.zip` a été inspecté automatiquement en CI, en lecture seule :
+
+- archive : 15 326 512 octets, SHA-256 `5016c32cfdb9f0b3c1528edc1ba8e47ebab33fbe97f3314eb5a3c0f972b075c4` ;
+- DB extraite : 15 699 968 octets, SHA-256 `37d697e3df940dc38aecba82e44f1416901563bb8ba545a9a25748d3cc59a53c` ;
+- `PRAGMA quick_check = ok` ;
+- tables actives : `FullData`, `ChunkHash`, `BeaconBeam`, `Schema` ;
+- `FullData` : 360 lignes, detail levels 0 à 8, format de données 2, compression 4 ;
+- `ChunkHash` : 1 959 lignes ;
+- `Legacy_FullData_V1` : 0 ligne.
+
+Cette DB confirme le schéma V2 que le futur générateur de deltas devra comparer par clés primaires et checksums, sans interpréter ni réencoder les BLOB DH.
 
 ## Architecture du MVP
 
@@ -99,9 +113,11 @@ Déjà implémenté :
 /gabcondhsync reload
 ```
 
-`status` affiche notamment le nombre de buckets en attente et la paire DH/API détectée.
+`status` affiche notamment le nombre de buckets en attente, l'état d'un éventuel snapshot et la paire DH/API détectée.
 
-Dans ce MVP, `snapshot` et `publish` **échouent volontairement avec un message explicite**. Ils ne copient ni ne modifient la base DH active.
+`/gabcondhsync snapshot` est **actif**. Il met temporairement DH en lecture seule via l'API publique, crée une copie cohérente avec le backup SQLite en ligne, vérifie chaque DB et écrit un `snapshot.json`. Les fichiers sont placés sous `gabcondhsync/snapshots/<worldId>/<timestamp UTC>/`.
+
+`/gabcondhsync publish` reste volontairement désactivé tant que le packaging delta et l'import hors ligne côté client ne sont pas validés.
 
 ## Configuration
 
@@ -111,14 +127,14 @@ Fichier NeoForge serveur généré pour le mod :
 
 - `enabled`
 - `repository`
-- `worldId` — **à changer** depuis `CHANGE_ME` avant toute future publication
+- `worldId` — `gabcon-main` (l'ancienne valeur `CHANGE_ME` est migrée automatiquement au démarrage)
 - `publishIntervalMinutes`
 - `changedRegionThreshold`
 - `nativeDhFallbackEnabled`
 - `autoPublish`
 - `maxDownloadBytes`
 
-`autoPublish` est ignoré par sécurité tant que l'adaptateur de snapshot n'est pas disponible.
+`autoPublish` reste ignoré par sécurité tant que GitHub Releases + deltas + import client ne sont pas validés.
 
 ### Client
 
@@ -169,7 +185,11 @@ Le JAR est généré dans `build/libs/`.
 - reprise d'un `.part` par HTTP Range ;
 - hash incorrect ;
 - téléchargement incomplet conservé pour reprise ;
-- regroupement de chunks avec coordonnées négatives.
+- regroupement de chunks avec coordonnées négatives ;
+- backup SQLite en ligne via un shim `dh_sqlite` de test ;
+- `PRAGMA quick_check` sur le snapshot ;
+- normalisation sûre des noms de dimensions ;
+- analyse CI en lecture seule de la DB DH de test réelle.
 
 ## CI / Releases
 
@@ -179,13 +199,13 @@ Le JAR est généré dans `build/libs/`.
 
 ## Étape DH suivante (expérimentale)
 
-Avant d'activer la vraie synchronisation LOD :
+Le prochain jalon est un test réel de `/gabcondhsync snapshot` sur le serveur avec DH 3.3.2. Après validation :
 
-1. fournir une **petite copie de test** de `DistantHorizons.sqlite` et, si présents au moment de la copie, les fichiers `-wal` / `-shm` ;
-2. ne pas utiliser la DB active de production pour les essais ;
-3. valider le schéma exact et le comportement de merge sur cette DB ;
-4. tester un mécanisme de snapshot cohérent (API officielle si disponible, sinon mécanisme SQLite explicitement coordonné) ;
-5. seulement ensuite connecter le download manager à une GUI et à l'import automatique avant connexion.
+1. comparer deux snapshots successifs pour produire un delta exact par clés primaires ;
+2. inclure les upserts **et** les suppressions afin de ne pas supposer que DH ne supprime jamais de lignes ;
+3. appliquer ce delta uniquement sur une DB client fermée, dans une transaction avec sauvegarde/rollback ;
+4. vérifier `quick_check`, SHA-256, `worldId=gabcon-main` et compatibilité DH avant remplacement ;
+5. seulement ensuite activer `publish`, GitHub Releases et l'interception de connexion client.
 
 ## Récupération / rollback
 
