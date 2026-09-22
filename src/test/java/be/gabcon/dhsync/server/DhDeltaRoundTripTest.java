@@ -50,7 +50,7 @@ class DhDeltaRoundTripTest {
         );
 
         assertTrue(Files.isRegularFile(applied.rollbackBackup()));
-        assertEquals(Hashes.sha256(oldDb), Hashes.sha256(applied.rollbackBackup()));
+        assertSemanticEquality(applied.rollbackBackup(), oldDb);
         assertSemanticEquality(clientDb, newDb);
 
         try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + clientDb)) {
