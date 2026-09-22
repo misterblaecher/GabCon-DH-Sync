@@ -9,20 +9,23 @@ Mod **NeoForge 1.21.1 / Java 21** destiné à réduire le trafic Distant Horizon
 - Minecraft Java Edition `1.21.1`
 - NeoForge `21.1.251`
 - Java `21`
-- Distant Horizons `3.3.1` (`DistantHorizons-3.3.1-1.21.1-fabric-neoforge.jar`)
-- API DH embarquée dans ce JAR : `7.1.0`
+- Distant Horizons `3.3.2` (`DistantHorizons-3.3.2-1.21.1-fabric-neoforge.jar`)
+- API DH embarquée dans ce JAR : `7.2.0`
+- Paire legacy encore acceptée par le détecteur : DH `3.3.1` / API `7.1.0`
 
 Le même JAR GabCon DH Sync est prévu pour le client et le serveur. Distant Horizons n'est **pas** embarqué dans le JAR GabCon.
 
-## Ce qui a été vérifié dans DH 3.3.1
+## Ce qui a été vérifié dans DH 3.3.2
 
-L'analyse du JAR exact fourni a confirmé les points suivants :
+L'analyse du JAR exact 3.3.2 et la comparaison binaire avec le JAR 3.3.1 ont confirmé les points suivants :
 
-1. `DhApi.getApiMajorVersion()/Minor/Patch()` retourne `7.1.0`.
-2. L'API publique expose `IDhApiTerrainDataRepo.overwriteChunkDataAsync(...)`, mais cette méthode accepte des objets chunks Minecraft via le wrapper DH ; ce n'est pas une API générique d'import de données LOD sérialisées.
-3. DH possède en interne un chemin réseau basé notamment sur `FullDataSourceResponseMessage` / `FullDataSourceV2DTO` capable de fusionner des données LOD, mais ces classes ne font pas partie de l'API publique et le MVP ne les utilise pas.
-4. Le stockage courant utilise `DistantHorizons.sqlite`; les migrations embarquées activent le mode SQLite **WAL**. Une copie brute de la DB active n'est donc pas considérée comme un snapshot cohérent.
-5. Aucune API publique vérifiée n'a été trouvée pour fermer/checkpointer/exporter puis réimporter un snapshot LOD sérialisé en sécurité.
+1. `DhApi.getApiMajorVersion()/Minor/Patch()` retourne désormais `7.2.0` (contre `7.1.0` en DH 3.3.1).
+2. Le protocole réseau DH reste à `16` entre 3.3.1 et 3.3.2.
+3. `IDhApiTerrainDataRepo` est inchangé. `overwriteChunkDataAsync(...)` existe toujours, mais reste une API alimentée par des objets chunks Minecraft ; ce n'est toujours pas une API générique d'import de LOD sérialisées.
+4. L'API 7.2.0 ajoute notamment `IDhApiConfigValue.setValue(value, modName)` ainsi que des informations de profondeur de rendu (`getDepthRange()`, `getDepthDirection()`). Ces ajouts ne fournissent pas de mécanisme de snapshot/import pour notre cas.
+5. Les scripts SQLite embarqués `0010` à `0110` sont identiques entre 3.3.1 et 3.3.2, y compris `journal_mode = WAL` et `synchronous = NORMAL`.
+6. DH possède toujours en interne un chemin réseau basé notamment sur `FullDataSourceResponseMessage` / `FullDataSourceV2DTO`, mais ces classes ne font pas partie de l'API publique et le MVP ne les utilise pas.
+7. Aucune nouvelle API publique vérifiée n'a été trouvée pour fermer/checkpointer/exporter puis réimporter un snapshot LOD sérialisé en sécurité.
 
 Conséquence : la première implémentation préfère **refuser** `snapshot`/`publish` plutôt que de risquer de corrompre une DB. L'étape suivante doit soit obtenir/valider un chemin d'import officiel DH, soit construire un format contrôlé et testable à partir d'une DB de test hors ligne.
 
@@ -44,7 +47,7 @@ Schéma `1` :
   "worldId": "gabcon-world-01",
   "minecraftVersion": "1.21.1",
   "neoforgeVersion": "21.1.251",
-  "distantHorizonsVersion": "3.3.1",
+  "distantHorizonsVersion": "3.3.2",
   "baseVersion": 1,
   "latestDelta": 128,
   "dimensions": {
