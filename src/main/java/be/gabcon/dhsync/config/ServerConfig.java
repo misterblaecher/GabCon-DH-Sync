@@ -18,7 +18,7 @@ public final class ServerConfig {
         b.push("gabcondhsync");
         ENABLED = b.define("enabled", true);
         REPOSITORY = b.define("repository", "misterblaecher/GabCon-DH-Sync");
-        WORLD_ID = b.define("worldId", "CHANGE_ME");
+        WORLD_ID = b.define("worldId", "gabcon-main");
         PUBLISH_INTERVAL_MINUTES = b.defineInRange("publishIntervalMinutes", 30, 1, 1440);
         CHANGED_REGION_THRESHOLD = b.defineInRange("changedRegionThreshold", 32, 1, 100000);
         NATIVE_DH_FALLBACK_ENABLED = b.define("nativeDhFallbackEnabled", true);
