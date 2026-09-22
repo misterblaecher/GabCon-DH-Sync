@@ -13,4 +13,9 @@ class ManifestCodecTest {
     @Test void rejectsUnsupportedSchemaVersion(){ assertThrows(ManifestException.class,()->ManifestCodec.parseAndValidate(manifest("world-a",2),"world-a",1024)); }
     @Test void rejectsPathTraversal(){ String json=manifest("world-a",1).replace("delta-2.gcdh","../evil.gcdh"); assertThrows(ManifestException.class,()->ManifestCodec.parseAndValidate(json,"world-a",1024)); }
     @Test void rejectsHttpUrl(){ String json=manifest("world-a",1).replace("https://example.invalid/base.gcdh","http://example.invalid/base.gcdh"); assertThrows(ManifestException.class,()->ManifestCodec.parseAndValidate(json,"world-a",1024)); }
+    @Test void rejectsMissingAssetUrl() {
+        String json = manifest("world-a", 1).replace("\"url\":\"https://example.invalid/base.gcdh\",", "");
+        assertThrows(ManifestException.class, () -> ManifestCodec.parseAndValidate(json, "world-a", 1024));
+    }
+
 }
