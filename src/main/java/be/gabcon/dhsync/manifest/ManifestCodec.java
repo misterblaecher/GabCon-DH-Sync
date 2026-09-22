@@ -58,6 +58,9 @@ public final class ManifestCodec {
         try { SafePaths.resolveAsset(java.nio.file.Path.of("safe-root"), asset.fileName()); }
         catch (RuntimeException e) { throw new ManifestException("Unsafe file name: " + asset.fileName(), e); }
         if (asset.sha256() == null || !asset.sha256().toLowerCase(Locale.ROOT).matches("[0-9a-f]{64}")) throw new ManifestException("Invalid SHA-256: " + asset.fileName());
+        if (asset.url() == null || asset.url().isBlank()) {
+            throw new ManifestException("Asset URL is required: " + asset.fileName());
+        }
         try {
             URI uri = URI.create(asset.url());
             if (!"https".equalsIgnoreCase(uri.getScheme()) || uri.getHost() == null) throw new ManifestException("Only HTTPS asset URLs are allowed");
