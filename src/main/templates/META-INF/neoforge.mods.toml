@@ -1,0 +1,36 @@
+modLoader="javafml"
+loaderVersion="${loader_version_range}"
+license="${mod_license}"
+issueTrackerURL="https://github.com/misterblaecher/GabCon-DH-Sync/issues"
+
+[[mods]]
+modId="${mod_id}"
+version="${mod_version}"
+displayName="${mod_name}"
+displayURL="https://github.com/misterblaecher/GabCon-DH-Sync"
+authors="GabCon"
+description='''
+Secure distribution bootstrap for Distant Horizons data. The MVP tracks changed server regions,
+validates manifests and downloads assets safely, but deliberately refuses direct active SQLite mutation.
+'''
+
+[[dependencies.${mod_id}]]
+modId="neoforge"
+type="required"
+versionRange="[${neo_version},)"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.${mod_id}]]
+modId="minecraft"
+type="required"
+versionRange="${minecraft_version_range}"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.${mod_id}]]
+modId="distanthorizons"
+type="optional"
+versionRange="[0,)"
+ordering="AFTER"
+side="BOTH"
