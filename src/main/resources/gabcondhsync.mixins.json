@@ -1,0 +1,12 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "be.gabcon.dhsync.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "client.ConnectScreenMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
