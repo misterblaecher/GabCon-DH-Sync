@@ -102,12 +102,9 @@ public final class DhDeltaBuilder {
             Path deltaDb = checkedChild(deltaRoot, deltaName);
             List<TableStats> stats = buildDimensionDelta(oldDb, newDb, deltaDb, older.sha256(), newer.sha256());
 
-            long operations = stats.stream().mapToLong(s -> s.upserts() + s.deletes()).sum();
-            if (operations == 0) {
-                Files.deleteIfExists(deltaDb);
-                continue;
-            }
-
+            // Even a zero-operation logical delta is retained when snapshot SHA tokens differ.
+            // SQLite physical bytes are not a stable logical identity; this tiny delta advances the
+            // server-baseline chain so the next real delta remains applicable.
             deltaFiles.add(new DeltaFile(
                     dimension,
                     deltaName,
