@@ -1,6 +1,5 @@
 package be.gabcon.dhsync.client;
 
-import be.gabcon.dhsync.manifest.ManifestException;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import net.neoforged.fml.loading.FMLPaths;
@@ -78,7 +77,7 @@ public final class ClientSyncStateStore {
         return value.trim().toLowerCase();
     }
 
-    public static void validate(ClientSyncState state) {
+    public static void validate(ClientSyncState state) throws IOException {
         if (state == null) throw new ManifestException("Client state is missing");
         if (state.schemaVersion() != ClientSyncState.SCHEMA_VERSION) {
             throw new ManifestException("Unsupported client state schema: " + state.schemaVersion());
@@ -92,7 +91,7 @@ public final class ClientSyncStateStore {
         }
     }
 
-    public static void validateProfile(ClientSyncState.ServerProfile profile) {
+    public static void validateProfile(ClientSyncState.ServerProfile profile) throws IOException {
         if (profile == null) throw new ManifestException("Client server profile is missing");
         requireText(profile.serverAddress(), "serverAddress");
         requireText(profile.worldId(), "worldId");
@@ -115,7 +114,7 @@ public final class ClientSyncStateStore {
         }
     }
 
-    private static void requireText(String value, String field) {
+    private static void requireText(String value, String field) throws IOException {
         if (value == null || value.isBlank()) throw new ManifestException("Missing " + field);
     }
 
