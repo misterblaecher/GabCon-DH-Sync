@@ -36,6 +36,11 @@ public final class DhDeltaApplier {
             List<TableApplyStats> tables
     ) {}
 
+    public record WorkingApplyResult(
+            String nextServerBaselineSha256,
+            List<TableApplyStats> tables
+    ) {}
+
     private record Column(String name, String type, boolean notNull, String defaultValue, int pkOrder) {}
 
     public static ApplyResult applyOffline(Path targetDatabase, Path deltaDatabase) throws Exception {
@@ -84,6 +89,32 @@ public final class DhDeltaApplier {
         }
 
         return applyVerified(target, delta, meta);
+    }
+
+    public static WorkingApplyResult applyToWorkingCopy(
+            Path workDatabase,
+            Path deltaDatabase,
+            String currentServerBaselineSha256
+    ) throws Exception {
+        Path work = workDatabase.toAbsolutePath().normalize();
+        Path delta = deltaDatabase.toAbsolutePath().normalize();
+        requireRegularFile(work, "Working DH database");
+        requireRegularFile(delta, "Delta database");
+        DhSqliteSnapshotter.verify(work);
+        DhSqliteSnapshotter.verify(delta);
+        requireSha256(currentServerBaselineSha256, "currentServerBaselineSha256");
+
+        DeltaMeta meta = readDeltaMeta(delta);
+        if (!currentServerBaselineSha256.equalsIgnoreCase(meta.oldSha256())) {
+            throw new IllegalStateException(
+                    "Delta chain mismatch: current server baseline "
+                            + currentServerBaselineSha256 + " != expected " + meta.oldSha256()
+            );
+        }
+
+        List<TableApplyStats> stats = applyIntoWorkingCopy(work, delta);
+        DhSqliteSnapshotter.verify(work);
+        return new WorkingApplyResult(meta.newSha256(), List.copyOf(stats));
     }
 
     private static ApplyResult applyVerified(Path target, Path delta, DeltaMeta meta) throws Exception {
