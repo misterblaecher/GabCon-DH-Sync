@@ -271,6 +271,24 @@ Le fichier réel `minecraft_overworld.delta.sqlite` produit par le serveur a ét
 
 Le fichier est donc structurellement compatible avec `DhDeltaApplier` 0.4.0-mvp.
 
+### Validation round-trip réelle
+
+Le round-trip complet a été validé localement sur les vraies données GabCon, sans toucher à une DB DH active :
+
+- snapshot source SHA-256 : `be76254f870c223d3052e690ecb7af47e1420ecde3a125e213e8592ef3d1104c` ;
+- snapshot cible SHA-256 : `5e38fd6f0a18f115413d9ea420aa0205088765d2220939c4bd3e97ea1fa0d3bd` ;
+- delta SHA-256 : `d2d48447d518998ccfc9b4991cfdea4298c58a52c68e1baae0d38785ba9ddd24` ;
+- intégrité avant application : `quick_check=ok` sur source, delta et cible ;
+- application : 938 `FullData` upserts, 3 702 `ChunkHash` upserts, aucune suppression ;
+- intégrité après application : `quick_check=ok` ;
+- `FullData` : 128 028 lignes, différence bidirectionnelle 0 ;
+- `ChunkHash` : 1 280 354 lignes, différence bidirectionnelle 0 ;
+- `BeaconBeam` : 0 ligne, différence 0 ;
+- `Schema` : 12 lignes, différence 0 ;
+- `Legacy_FullData_V1` : 0 ligne, différence 0.
+
+Résultat : **PASS**. Le premier snapshot + le delta reproduit exactement le contenu logique du deuxième snapshot. Cela valide le format de delta, l'ordre delete/upsert et le principe d'application hors ligne sur les données réelles du serveur.
+
 ### Conséquence pour GitHub Releases
 
 GitHub impose que chaque asset de release fasse moins de 2 GiB. L'Overworld de plus de 10 Go ne peut donc jamais être envoyé comme un unique fichier.
