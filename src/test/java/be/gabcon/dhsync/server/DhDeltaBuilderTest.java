@@ -95,7 +95,10 @@ class DhDeltaBuilderTest {
         DhDeltaBuilder.DeltaResult result =
                 DhDeltaBuilder.build(oldDir, newDir, "gabcon-main", temp.resolve("zero-deltas"));
 
-        assertTrue(result.files().isEmpty());
+        assertEquals(1, result.files().size());
+        assertEquals(0, result.files().getFirst().tables().stream()
+                .mapToLong(t -> t.upserts() + t.deletes()).sum());
+        assertTrue(Files.isRegularFile(result.directory().resolve(result.files().getFirst().fileName())));
         assertTrue(Files.isRegularFile(result.manifest()));
     }
 
