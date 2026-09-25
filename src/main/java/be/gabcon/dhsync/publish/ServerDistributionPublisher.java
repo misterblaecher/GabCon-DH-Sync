@@ -1,5 +1,6 @@
 package be.gabcon.dhsync.publish;
 
+import be.gabcon.dhsync.GabConDhSync;
 import be.gabcon.dhsync.config.ServerConfig;
 import be.gabcon.dhsync.distribution.DistributionManifest;
 import be.gabcon.dhsync.distribution.DistributionManifestCodec;
@@ -92,7 +93,9 @@ public final class ServerDistributionPublisher {
 
         // Manifest is always replaced last. Clients never see a chain that references assets still uploading.
         GitHubReleaseClient.Release refreshed = github.refresh(tag);
+        GabConDhSync.LOGGER.info("[GabConDHSync] Publishing manifest.json last.");
         github.uploadReplacing(refreshed, "manifest.json", manifestPath, "application/json");
+        GabConDhSync.LOGGER.info("[GabConDHSync] Published manifest.json.");
 
         return new PublicationResult(
                 bootstrapCreated,
@@ -162,7 +165,14 @@ public final class ServerDistributionPublisher {
                         throw new IOException("Invalid bootstrap part size: " + written);
                     }
                     String sha = Hashes.sha256(temp);
+                    GabConDhSync.LOGGER.info("[GabConDHSync] Publishing bootstrap asset {}/{}: {} ({} bytes)",
+                            index + 1, partCount, name, written);
                     boolean uploaded = github.uploadImmutable(release, name, temp, "application/octet-stream");
+                    if (uploaded) {
+                        GabConDhSync.LOGGER.info("[GabConDHSync] Uploaded bootstrap asset: {}", name);
+                    } else {
+                        GabConDhSync.LOGGER.info("[GabConDHSync] Reused existing bootstrap asset: {}", name);
+                    }
                     counters = counters.add(uploaded ? new Counters(1, 0) : new Counters(0, 1));
                     parts.add(new DistributionManifest.PartAsset(
                             name,
@@ -245,7 +255,13 @@ public final class ServerDistributionPublisher {
                     throw new IOException("Delta exceeds configured asset size limit: " + file.size());
                 }
 
+                GabConDhSync.LOGGER.info("[GabConDHSync] Publishing delta asset: {} ({} bytes)", remoteName, file.size());
                 boolean uploaded = github.uploadImmutable(release, remoteName, source, "application/octet-stream");
+                if (uploaded) {
+                    GabConDhSync.LOGGER.info("[GabConDHSync] Uploaded delta asset: {}", remoteName);
+                } else {
+                    GabConDhSync.LOGGER.info("[GabConDHSync] Reused existing delta asset: {}", remoteName);
+                }
                 counters = counters.add(uploaded ? new Counters(1, 0) : new Counters(0, 1));
 
                 List<DistributionManifest.DeltaAsset> deltas = new ArrayList<>(current.deltas());
