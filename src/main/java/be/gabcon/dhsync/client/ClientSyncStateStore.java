@@ -78,44 +78,44 @@ public final class ClientSyncStateStore {
     }
 
     public static void validate(ClientSyncState state) throws IOException {
-        if (state == null) throw new ManifestException("Client state is missing");
+        if (state == null) throw new IOException("Client state is missing");
         if (state.schemaVersion() != ClientSyncState.SCHEMA_VERSION) {
-            throw new ManifestException("Unsupported client state schema: " + state.schemaVersion());
+            throw new IOException("Unsupported client state schema: " + state.schemaVersion());
         }
-        if (state.servers() == null) throw new ManifestException("Client state servers are missing");
+        if (state.servers() == null) throw new IOException("Client state servers are missing");
         for (Map.Entry<String, ClientSyncState.ServerProfile> entry : state.servers().entrySet()) {
             validateProfile(entry.getValue());
             if (!normalizeServerAddress(entry.getKey()).equals(normalizeServerAddress(entry.getValue().serverAddress()))) {
-                throw new ManifestException("Client state server key mismatch: " + entry.getKey());
+                throw new IOException("Client state server key mismatch: " + entry.getKey());
             }
         }
     }
 
     public static void validateProfile(ClientSyncState.ServerProfile profile) throws IOException {
-        if (profile == null) throw new ManifestException("Client server profile is missing");
+        if (profile == null) throw new IOException("Client server profile is missing");
         requireText(profile.serverAddress(), "serverAddress");
         requireText(profile.worldId(), "worldId");
         requireText(profile.manifestUrl(), "manifestUrl");
         if (!profile.manifestUrl().startsWith("https://")) {
-            throw new ManifestException("Client manifest URL must use HTTPS");
+            throw new IOException("Client manifest URL must use HTTPS");
         }
         if (profile.dimensions() == null || profile.dimensions().isEmpty()) {
-            throw new ManifestException("Client profile has no DH dimensions");
+            throw new IOException("Client profile has no DH dimensions");
         }
         for (Map.Entry<String, ClientSyncState.DimensionState> entry : profile.dimensions().entrySet()) {
             requireText(entry.getKey(), "dimension");
             ClientSyncState.DimensionState dimension = entry.getValue();
-            if (dimension == null) throw new ManifestException("Missing dimension state: " + entry.getKey());
+            if (dimension == null) throw new IOException("Missing dimension state: " + entry.getKey());
             requireText(dimension.databasePath(), "databasePath");
             String baseline = dimension.serverBaselineSha256();
             if (baseline != null && !baseline.isBlank() && !baseline.matches("(?i)[0-9a-f]{64}")) {
-                throw new ManifestException("Invalid baseline SHA for " + entry.getKey());
+                throw new IOException("Invalid baseline SHA for " + entry.getKey());
             }
         }
     }
 
     private static void requireText(String value, String field) throws IOException {
-        if (value == null || value.isBlank()) throw new ManifestException("Missing " + field);
+        if (value == null || value.isBlank()) throw new IOException("Missing " + field);
     }
 
     private ClientSyncStateStore() {}
