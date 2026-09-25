@@ -1,10 +1,13 @@
 package be.gabcon.dhsync;
 
+import be.gabcon.dhsync.client.ClientBootstrap;
 import be.gabcon.dhsync.config.ClientConfig;
 import be.gabcon.dhsync.config.ServerConfig;
 import be.gabcon.dhsync.server.ServerEvents;
 import com.mojang.logging.LogUtils;
+import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
+import net.neoforged.fml.DistExecutor;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.config.ModConfig;
@@ -20,6 +23,7 @@ public final class GabConDhSync {
         modContainer.registerConfig(ModConfig.Type.SERVER, ServerConfig.SPEC);
         modContainer.registerConfig(ModConfig.Type.CLIENT, ClientConfig.SPEC);
         NeoForge.EVENT_BUS.register(new ServerEvents());
-        LOGGER.info("[GabConDHSync] MVP loaded; direct active Distant Horizons SQLite mutation is disabled by design.");
+        DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> ClientBootstrap::init);
+        LOGGER.info("[GabConDHSync] Loaded: safe server snapshots/deltas and managed client pre-connect sync are available.");
     }
 }
