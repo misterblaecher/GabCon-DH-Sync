@@ -22,7 +22,8 @@ public final class GitHubReleaseClient {
     private static final String UPLOAD = "https://uploads.github.com";
     private static final Gson GSON = new Gson();
 
-    public record Release(long id, String tag, Map<String, Long> assetsByName) {}
+    public record AssetInfo(long id, long size) {}
+    public record Release(long id, String tag, Map<String, AssetInfo> assetsByName) {}
 
     private final String repository;
     private final String token;
@@ -76,8 +77,8 @@ public final class GitHubReleaseClient {
 
     public void uploadReplacing(Release release, String assetName, Path source, String contentType)
             throws IOException, InterruptedException {
-        Long existing = release.assetsByName().get(assetName);
-        if (existing != null) deleteAsset(existing);
+        AssetInfo existing = release.assetsByName().get(assetName);
+        if (existing != null) deleteAsset(existing.id());
 
         URI uri = URI.create(UPLOAD + "/repos/" + repository + "/releases/" + release.id()
                 + "/assets?name=" + enc(assetName));
@@ -88,6 +89,15 @@ public final class GitHubReleaseClient {
                 .build();
         HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() != 201) throw apiError("upload asset " + assetName, response);
+    }
+
+    public boolean uploadImmutable(Release release, String assetName, Path source, String contentType)
+            throws IOException, InterruptedException {
+        long size = java.nio.file.Files.size(source);
+        AssetInfo existing = release.assetsByName().get(assetName);
+        if (existing != null && existing.size() == size) return false;
+        uploadReplacing(release, assetName, source, contentType);
+        return true;
     }
 
     public void deleteAsset(long assetId) throws IOException, InterruptedException {
@@ -118,12 +128,13 @@ public final class GitHubReleaseClient {
         JsonObject root = JsonParser.parseString(json).getAsJsonObject();
         long id = root.get("id").getAsLong();
         String tag = root.get("tag_name").getAsString();
-        Map<String, Long> assets = new LinkedHashMap<>();
+        Map<String, AssetInfo> assets = new LinkedHashMap<>();
         JsonArray array = root.has("assets") && root.get("assets").isJsonArray()
                 ? root.getAsJsonArray("assets") : new JsonArray();
         for (var item : array) {
             JsonObject asset = item.getAsJsonObject();
-            assets.put(asset.get("name").getAsString(), asset.get("id").getAsLong());
+            assets.put(asset.get("name").getAsString(),
+                    new AssetInfo(asset.get("id").getAsLong(), asset.get("size").getAsLong()));
         }
         return new Release(id, tag, Map.copyOf(assets));
     }
