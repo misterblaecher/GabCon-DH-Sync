@@ -14,7 +14,7 @@ class DistributionManifestCodecTest {
     private static final String C = "c".repeat(64);
 
     @Test
-    void acceptsSegmentedBootstrapAndContinuousDeltaChain() {
+    void acceptsSegmentedBootstrapAndContinuousDeltaChain() throws Exception {
         DistributionManifest manifest = manifest(List.of(
                 new DistributionManifest.DeltaAsset(
                         "delta_ab.sqlite", 1234, C,
