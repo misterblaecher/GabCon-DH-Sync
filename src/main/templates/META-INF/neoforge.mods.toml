@@ -10,9 +10,12 @@ displayName="${mod_name}"
 displayURL="https://github.com/misterblaecher/GabCon-DH-Sync"
 authors="GabCon"
 description='''
-Secure distribution bootstrap for Distant Horizons data. The MVP tracks changed server regions,
-validates manifests and downloads assets safely, but deliberately refuses direct active SQLite mutation.
+Secure Distant Horizons distribution for GabCon. Server snapshots and logical deltas are published
+externally; managed clients synchronize verified offline DH databases before connecting.
 '''
+
+[[mixins]]
+config="gabcondhsync.mixins.json"
 
 [[dependencies.${mod_id}]]
 modId="neoforge"
