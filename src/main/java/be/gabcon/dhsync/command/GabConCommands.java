@@ -6,6 +6,7 @@ import be.gabcon.dhsync.server.DhCompatibility;
 import be.gabcon.dhsync.server.DhDeltaBuilder;
 import be.gabcon.dhsync.server.DhSnapshotService;
 import be.gabcon.dhsync.server.ServerState;
+import be.gabcon.dhsync.publish.ServerDistributionPublisher;
 import com.mojang.brigadier.CommandDispatcher;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -20,7 +21,7 @@ public final class GabConCommands {
                 .then(Commands.literal("status").executes(ctx -> status(ctx.getSource())))
                 .then(Commands.literal("snapshot").executes(ctx -> snapshot(ctx.getSource())))
                 .then(Commands.literal("delta").executes(ctx -> delta(ctx.getSource())))
-                .then(Commands.literal("publish").executes(ctx -> blockedPublish(ctx.getSource())))
+                .then(Commands.literal("publish").executes(ctx -> publish(ctx.getSource())))
                 .then(Commands.literal("reload").executes(ctx -> reload(ctx.getSource()))));
     }
 
@@ -31,6 +32,7 @@ public final class GabConCommands {
                 + ", pendingBuckets=" + ServerState.CHANGED_REGIONS.pendingCount()
                 + ", snapshotRunning=" + ServerState.SNAPSHOT_RUNNING.get()
                 + ", deltaRunning=" + ServerState.DELTA_RUNNING.get()
+                + ", publishRunning=" + ServerState.PUBLISH_RUNNING.get()
                 + ", DH=" + dh.modVersion()
                 + ", API=" + dh.apiVersion()
                 + ", compatible=" + dh.compatible()), false);
@@ -50,7 +52,8 @@ public final class GabConCommands {
             return 0;
         }
 
-        if (ServerState.DELTA_RUNNING.get() || !ServerState.SNAPSHOT_RUNNING.compareAndSet(false, true)) {
+        if (ServerState.DELTA_RUNNING.get() || ServerState.PUBLISH_RUNNING.get()
+                || !ServerState.SNAPSHOT_RUNNING.compareAndSet(false, true)) {
             source.sendFailure(Component.literal("[GabConDHSync] Another maintenance operation is already running."));
             return 0;
         }
@@ -82,7 +85,8 @@ public final class GabConCommands {
             return 0;
         }
 
-        if (ServerState.SNAPSHOT_RUNNING.get() || !ServerState.DELTA_RUNNING.compareAndSet(false, true)) {
+        if (ServerState.SNAPSHOT_RUNNING.get() || ServerState.PUBLISH_RUNNING.get()
+                || !ServerState.DELTA_RUNNING.compareAndSet(false, true)) {
             source.sendFailure(Component.literal("[GabConDHSync] Another maintenance operation is already running."));
             return 0;
         }
@@ -113,10 +117,41 @@ public final class GabConCommands {
         return 1;
     }
 
-    private static int blockedPublish(CommandSourceStack source) {
-        source.sendFailure(Component.literal("[GabConDHSync] publish is still intentionally disabled: "
-                + "delta packaging is now available, but client offline transactional import must be validated before GitHub publication."));
-        return 0;
+    private static int publish(CommandSourceStack source) {
+        if (!ServerConfig.ENABLED.get()) {
+            source.sendFailure(Component.literal("[GabConDHSync] Publish refused: mod is disabled."));
+            return 0;
+        }
+        if (ServerState.SNAPSHOT_RUNNING.get() || ServerState.DELTA_RUNNING.get()
+                || !ServerState.PUBLISH_RUNNING.compareAndSet(false, true)) {
+            source.sendFailure(Component.literal("[GabConDHSync] Another maintenance operation is already running."));
+            return 0;
+        }
+
+        source.sendSuccess(() -> Component.literal(
+                "[GabConDHSync] Publishing bootstrap/deltas to GitHub Release "
+                        + ServerConfig.RELEASE_TAG.get() + ". First publication can upload many GiB."
+        ), false);
+
+        CompletableFuture.runAsync(() -> {
+            try {
+                ServerDistributionPublisher.PublicationResult result = ServerDistributionPublisher.publish();
+                source.getServer().execute(() -> source.sendSuccess(
+                        () -> Component.literal("[GabConDHSync] Publish complete: bootstrapCreated="
+                                + result.bootstrapCreated()
+                                + ", uploadedAssets=" + result.uploadedAssets()
+                                + ", reusedAssets=" + result.reusedAssets()
+                                + ", manifest=" + result.localManifest()), false));
+            } catch (Exception e) {
+                GabConDhSync.LOGGER.error("[GabConDHSync] Publication failed", e);
+                source.getServer().execute(() -> source.sendFailure(
+                        Component.literal("[GabConDHSync] Publish failed safely: "
+                                + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()))));
+            } finally {
+                ServerState.PUBLISH_RUNNING.set(false);
+            }
+        }, ServerState.MAINTENANCE_EXECUTOR);
+        return 1;
     }
 
     private static int reload(CommandSourceStack source) {
