@@ -37,7 +37,7 @@ public final class ClientSyncEngine {
     private final SecureDownloader downloader;
 
     public ClientSyncEngine(Executor downloadExecutor) {
-        this.downloader = new SecureDownloader(downloadExecutor);
+        this.downloader = new SecureDownloader(downloadExecutor, ClientConfig.OPTIONAL_DOWNLOAD_SPEED_LIMIT.get());
     }
 
     public SyncResult sync(ClientSyncState.ServerProfile profile, ProgressSink progress) throws Exception {
