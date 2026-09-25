@@ -25,9 +25,16 @@ import java.util.function.Consumer;
 public final class SecureDownloader {
     private final HttpClient client;
     private final Executor executor;
+    private final long bytesPerSecondLimit;
 
     public SecureDownloader(Executor executor) {
+        this(executor, 0L);
+    }
+
+    public SecureDownloader(Executor executor, long bytesPerSecondLimit) {
         this.executor = Objects.requireNonNull(executor);
+        if (bytesPerSecondLimit < 0) throw new IllegalArgumentException("Negative download speed limit");
+        this.bytesPerSecondLimit = bytesPerSecondLimit;
         this.client = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(15))
                 .followRedirects(HttpClient.Redirect.NORMAL)
@@ -91,7 +98,7 @@ public final class SecureDownloader {
         HttpRequest.Builder builder = HttpRequest.newBuilder(request.uri())
                 .GET()
                 .timeout(Duration.ofSeconds(60))
-                .header("User-Agent", "GabConDHSync/0.1");
+                .header("User-Agent", "GabConDHSync/0.5");
         if (existing > 0) builder.header("Range", "bytes=" + existing + "-");
 
         HttpResponse<InputStream> response = client.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream());
@@ -125,6 +132,7 @@ public final class SecureDownloader {
                 downloaded += read;
                 if (downloaded > request.maxBytes() || downloaded > request.expectedSize()) throw new IOException("Download exceeds expected size");
                 out.write(buffer, 0, read);
+                throttle(downloaded - existing, started);
                 double seconds = Math.max((System.nanoTime() - started) / 1_000_000_000.0, 0.001);
                 double speed = Math.max((downloaded - existing) / seconds, 0.0);
                 long remaining = Math.max(request.expectedSize() - downloaded, 0);
@@ -132,6 +140,22 @@ public final class SecureDownloader {
                 progress.accept(new DownloadProgress(downloaded, request.expectedSize(), speed, eta));
             }
         }
+    }
+
+    private void throttle(long sessionBytes, long startedNanos) throws InterruptedException {
+        if (bytesPerSecondLimit <= 0 || sessionBytes <= 0) return;
+        long expectedNanos;
+        try {
+            expectedNanos = Math.multiplyExact(sessionBytes, 1_000_000_000L) / bytesPerSecondLimit;
+        } catch (ArithmeticException e) {
+            expectedNanos = Long.MAX_VALUE;
+        }
+        long elapsed = System.nanoTime() - startedNanos;
+        long wait = expectedNanos - elapsed;
+        if (wait <= 0) return;
+        long millis = wait / 1_000_000L;
+        int nanos = (int) (wait % 1_000_000L);
+        Thread.sleep(millis, nanos);
     }
 
     private static void validateRequest(DownloadRequest request) {
