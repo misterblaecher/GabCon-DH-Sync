@@ -23,14 +23,8 @@ public final class ClientPreConnectController {
         t.setDaemon(true);
         return t;
     });
-    private static final ExecutorService DOWNLOAD_EXECUTOR = Executors.newFixedThreadPool(
-            2,
-            r -> {
-                Thread t = new Thread(r, "GabConDHSync-Download");
-                t.setDaemon(true);
-                return t;
-            }
-    );
+    private static volatile ExecutorService downloadExecutor;
+    private static volatile int downloadExecutorSize;
 
     public static boolean intercept(
             Screen parent,
@@ -55,8 +49,11 @@ public final class ClientPreConnectController {
             profile = found.get();
         } catch (Exception e) {
             GabConDhSync.LOGGER.error("[GabConDHSync] Cannot read managed client profile for {}", serverKey, e);
-            return !fallbackOrShowError(parent, minecraft, serverAddress, serverData, isQuickPlay, transferState,
-                    "Cannot read GabCon client state: " + message(e));
+            if (ClientConfig.ALLOW_FALLBACK.get()) return false;
+            ClientSyncScreen errorScreen = new ClientSyncScreen(parent);
+            minecraft.setScreen(errorScreen);
+            errorScreen.fail("Cannot read GabCon client state: " + message(e));
+            return true;
         }
 
         if (!SYNC_RUNNING.compareAndSet(false, true)) {
@@ -66,7 +63,7 @@ public final class ClientPreConnectController {
 
         ClientSyncScreen screen = new ClientSyncScreen(parent);
         minecraft.setScreen(screen);
-        ClientSyncEngine engine = new ClientSyncEngine(DOWNLOAD_EXECUTOR);
+        ClientSyncEngine engine = new ClientSyncEngine(downloadExecutor());
 
         CompletableFuture.supplyAsync(() -> {
             try {
@@ -101,20 +98,18 @@ public final class ClientPreConnectController {
         return true;
     }
 
-    private static boolean fallbackOrShowError(
-            Screen parent,
-            Minecraft minecraft,
-            ServerAddress serverAddress,
-            ServerData serverData,
-            boolean isQuickPlay,
-            TransferState transferState,
-            String error
-    ) {
-        if (ClientConfig.ALLOW_FALLBACK.get()) return true;
-        ClientSyncScreen screen = new ClientSyncScreen(parent);
-        minecraft.setScreen(screen);
-        screen.fail(error);
-        return false;
+    private static synchronized ExecutorService downloadExecutor() {
+        int desired = Math.max(1, ClientConfig.MAX_CONCURRENT_DOWNLOADS.get());
+        if (downloadExecutor == null || downloadExecutor.isShutdown() || downloadExecutorSize != desired) {
+            if (downloadExecutor != null) downloadExecutor.shutdown();
+            downloadExecutorSize = desired;
+            downloadExecutor = Executors.newFixedThreadPool(desired, r -> {
+                Thread t = new Thread(r, "GabConDHSync-Download");
+                t.setDaemon(true);
+                return t;
+            });
+        }
+        return downloadExecutor;
     }
 
     private static void resume(
