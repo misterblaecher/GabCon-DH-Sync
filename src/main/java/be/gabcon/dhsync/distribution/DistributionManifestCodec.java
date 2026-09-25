@@ -16,7 +16,7 @@ public final class DistributionManifestCodec {
     public static final int SCHEMA_VERSION = 2;
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
-    public static DistributionManifest parse(String json, long maxAssetBytes) {
+    public static DistributionManifest parse(String json, long maxAssetBytes) throws ManifestException {
         DistributionManifest manifest;
         try {
             manifest = GSON.fromJson(json, DistributionManifest.class);
@@ -27,12 +27,12 @@ public final class DistributionManifestCodec {
         return manifest;
     }
 
-    public static String toJson(DistributionManifest manifest, long maxAssetBytes) {
+    public static String toJson(DistributionManifest manifest, long maxAssetBytes) throws ManifestException {
         validate(manifest, maxAssetBytes);
         return GSON.toJson(manifest);
     }
 
-    public static void validate(DistributionManifest manifest, long maxAssetBytes) {
+    public static void validate(DistributionManifest manifest, long maxAssetBytes) throws ManifestException {
         if (manifest == null) throw new ManifestException("Manifest is missing");
         if (manifest.schemaVersion() != SCHEMA_VERSION) {
             throw new ManifestException("Unsupported distribution schema: " + manifest.schemaVersion());
@@ -75,7 +75,7 @@ public final class DistributionManifestCodec {
         }
     }
 
-    private static void validateBootstrap(DistributionManifest.BootstrapAsset bootstrap, long maxAssetBytes) {
+    private static void validateBootstrap(DistributionManifest.BootstrapAsset bootstrap, long maxAssetBytes) throws ManifestException {
         safeFileName(bootstrap.databaseFileName());
         requireSha(bootstrap.databaseSha256(), "bootstrap databaseSha256");
         if (bootstrap.totalSize() <= 0) throw new ManifestException("Invalid bootstrap totalSize");
@@ -96,7 +96,7 @@ public final class DistributionManifestCodec {
         }
     }
 
-    private static void validateDelta(DistributionManifest.DeltaAsset delta, long maxAssetBytes) {
+    private static void validateDelta(DistributionManifest.DeltaAsset delta, long maxAssetBytes) throws ManifestException {
         if (delta == null) throw new ManifestException("Null delta");
         safeFileName(delta.fileName());
         validateSize(delta.size(), maxAssetBytes, "delta");
@@ -106,13 +106,13 @@ public final class DistributionManifestCodec {
         requireHttps(delta.url());
     }
 
-    private static void validateSize(long size, long maxAssetBytes, String label) {
+    private static void validateSize(long size, long maxAssetBytes, String label) throws ManifestException {
         if (size <= 0 || size > maxAssetBytes) {
             throw new ManifestException("Invalid " + label + " size: " + size);
         }
     }
 
-    private static void requireHttps(String value) {
+    private static void requireHttps(String value) throws ManifestException {
         requireText(value, "url");
         URI uri;
         try {
@@ -125,7 +125,7 @@ public final class DistributionManifestCodec {
         }
     }
 
-    private static void safeFileName(String fileName) {
+    private static void safeFileName(String fileName) throws ManifestException {
         requireText(fileName, "fileName");
         try {
             Path root = Path.of(".").toAbsolutePath().normalize();
@@ -135,13 +135,13 @@ public final class DistributionManifestCodec {
         }
     }
 
-    private static void requireSha(String value, String field) {
+    private static void requireSha(String value, String field) throws ManifestException {
         if (value == null || !value.matches("(?i)[0-9a-f]{64}")) {
             throw new ManifestException("Invalid " + field);
         }
     }
 
-    private static void requireText(String value, String field) {
+    private static void requireText(String value, String field) throws ManifestException {
         if (value == null || value.isBlank()) throw new ManifestException("Missing " + field);
     }
 
