@@ -47,6 +47,7 @@ public final class DistributionManifestCodec {
             throw new ManifestException("Manifest dimensions are missing");
         }
 
+        Set<String> globalNames = new HashSet<>();
         for (Map.Entry<String, DistributionManifest.DimensionDistribution> entry : manifest.dimensions().entrySet()) {
             String dimension = entry.getKey();
             requireText(dimension, "dimension");
@@ -57,15 +58,14 @@ public final class DistributionManifestCodec {
             validateBootstrap(bootstrap, maxAssetBytes);
 
             String expectedBaseline = bootstrap.databaseSha256();
-            Set<String> names = new HashSet<>();
             for (DistributionManifest.PartAsset part : bootstrap.parts()) {
-                if (!names.add(part.fileName())) throw new ManifestException("Duplicate asset filename: " + part.fileName());
+                if (!globalNames.add(part.fileName())) throw new ManifestException("Duplicate asset filename: " + part.fileName());
             }
 
             List<DistributionManifest.DeltaAsset> deltas = dist.deltas() == null ? List.of() : dist.deltas();
             for (DistributionManifest.DeltaAsset delta : deltas) {
                 validateDelta(delta, maxAssetBytes);
-                if (!names.add(delta.fileName())) throw new ManifestException("Duplicate asset filename: " + delta.fileName());
+                if (!globalNames.add(delta.fileName())) throw new ManifestException("Duplicate asset filename: " + delta.fileName());
                 if (!expectedBaseline.equalsIgnoreCase(delta.oldServerBaselineSha256())) {
                     throw new ManifestException("Broken delta chain for " + dimension + ": expected " + expectedBaseline
                             + " but got " + delta.oldServerBaselineSha256());
