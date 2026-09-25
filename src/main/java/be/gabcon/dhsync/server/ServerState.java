@@ -8,11 +8,16 @@ public final class ServerState {
     public static final ChangedRegionTracker CHANGED_REGIONS = new ChangedRegionTracker();
     public static final AtomicBoolean SNAPSHOT_RUNNING = new AtomicBoolean(false);
     public static final AtomicBoolean DELTA_RUNNING = new AtomicBoolean(false);
+    public static final AtomicBoolean PUBLISH_RUNNING = new AtomicBoolean(false);
     public static final ExecutorService MAINTENANCE_EXECUTOR = Executors.newSingleThreadExecutor(r -> {
         Thread thread = new Thread(r, "GabConDHSync-Maintenance");
         thread.setDaemon(true);
         return thread;
     });
+
+    public static boolean maintenanceRunning() {
+        return SNAPSHOT_RUNNING.get() || DELTA_RUNNING.get() || PUBLISH_RUNNING.get();
+    }
 
     private ServerState() {}
 }
