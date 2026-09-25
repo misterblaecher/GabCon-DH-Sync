@@ -265,7 +265,17 @@ public final class DhDeltaApplier {
         }
     }
 
+    public record DeltaMetadata(String oldSha256, String newSha256) {}
+
     private record DeltaMeta(String oldSha256, String newSha256) {}
+
+    public static DeltaMetadata inspectDelta(Path deltaDatabase) throws Exception {
+        Path delta = deltaDatabase.toAbsolutePath().normalize();
+        requireRegularFile(delta, "Delta database");
+        DhSqliteSnapshotter.verify(delta);
+        DeltaMeta meta = readDeltaMeta(delta);
+        return new DeltaMetadata(meta.oldSha256(), meta.newSha256());
+    }
 
     private static DeltaMeta readDeltaMeta(Path delta) throws Exception {
         Class.forName(DRIVER_CLASS);
