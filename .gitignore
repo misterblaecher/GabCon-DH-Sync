@@ -8,3 +8,6 @@ run/
 *.sqlite-wal
 *.sqlite-shm
 *.part
+
+# Runtime snapshots, deltas, downloads, state and publication staging
+gabcondhsync/
