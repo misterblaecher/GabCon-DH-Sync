@@ -94,6 +94,11 @@ public final class ClientDatabaseCommitter {
                     .filter(ClientRecoveryJournal.Entry::originalExisted)
                     .map(e -> Path.of(e.rollbackPath()))
                     .toList();
+            for (ClientRecoveryJournal.Entry entry : entries) {
+                if (entry.originalExisted()) {
+                    cleanupOlderRollbacks(Path.of(entry.targetPath()), Path.of(entry.rollbackPath()));
+                }
+            }
             return new CommitResult(updated, rollbacks);
         } catch (Exception failure) {
             try {
@@ -102,6 +107,28 @@ public final class ClientDatabaseCommitter {
                 failure.addSuppressed(recoveryFailure);
             }
             throw failure;
+        }
+    }
+
+    private static void cleanupOlderRollbacks(Path target, Path keep) {
+        Path parent = target.toAbsolutePath().normalize().getParent();
+        if (parent == null || !Files.isDirectory(parent)) return;
+        String prefix = target.getFileName() + ".gabcon-rollback-";
+        try (var stream = Files.list(parent)) {
+            for (Path candidate : stream
+                    .filter(Files::isRegularFile)
+                    .filter(p -> p.getFileName().toString().startsWith(prefix))
+                    .toList()) {
+                if (!candidate.toAbsolutePath().normalize().equals(keep.toAbsolutePath().normalize())) {
+                    try {
+                        Files.deleteIfExists(candidate);
+                    } catch (IOException ignored) {
+                        // Retention cleanup is best-effort and must never invalidate a successful commit.
+                    }
+                }
+            }
+        } catch (IOException ignored) {
+            // Same: a stale rollback is preferable to a failed/rolled-back sync.
         }
     }
 
