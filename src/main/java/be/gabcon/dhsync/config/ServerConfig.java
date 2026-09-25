@@ -7,11 +7,13 @@ public final class ServerConfig {
     public static final ModConfigSpec.BooleanValue ENABLED;
     public static final ModConfigSpec.ConfigValue<String> REPOSITORY;
     public static final ModConfigSpec.ConfigValue<String> WORLD_ID;
+    public static final ModConfigSpec.ConfigValue<String> RELEASE_TAG;
     public static final ModConfigSpec.IntValue PUBLISH_INTERVAL_MINUTES;
     public static final ModConfigSpec.IntValue CHANGED_REGION_THRESHOLD;
     public static final ModConfigSpec.BooleanValue NATIVE_DH_FALLBACK_ENABLED;
     public static final ModConfigSpec.BooleanValue AUTO_PUBLISH;
     public static final ModConfigSpec.LongValue MAX_DOWNLOAD_BYTES;
+    public static final ModConfigSpec.LongValue BOOTSTRAP_PART_BYTES;
 
     static {
         ModConfigSpec.Builder b = new ModConfigSpec.Builder();
@@ -19,11 +21,16 @@ public final class ServerConfig {
         ENABLED = b.define("enabled", true);
         REPOSITORY = b.define("repository", "misterblaecher/GabCon-DH-Sync");
         WORLD_ID = b.define("worldId", "gabcon-main");
+        RELEASE_TAG = b.comment("Stable GitHub Release tag used for DH data assets.")
+                .define("releaseTag", "gabcon-data-gabcon-main");
         PUBLISH_INTERVAL_MINUTES = b.defineInRange("publishIntervalMinutes", 30, 1, 1440);
         CHANGED_REGION_THRESHOLD = b.defineInRange("changedRegionThreshold", 32, 1, 100000);
         NATIVE_DH_FALLBACK_ENABLED = b.define("nativeDhFallbackEnabled", true);
-        AUTO_PUBLISH = b.comment("Ignored while GitHub publishing and client offline import are not yet validated.").define("autoPublish", false);
+        AUTO_PUBLISH = b.comment("Automatic publication remains opt-in; manual /gabcondhsync publish is the validation path.")
+                .define("autoPublish", false);
         MAX_DOWNLOAD_BYTES = b.defineInRange("maxDownloadBytes", 2L * 1024 * 1024 * 1024, 1L, Long.MAX_VALUE);
+        BOOTSTRAP_PART_BYTES = b.comment("Bootstrap chunk size. Must remain below GitHub's per-asset limit.")
+                .defineInRange("bootstrapPartBytes", 1024L * 1024 * 1024, 64L * 1024 * 1024, 1536L * 1024 * 1024);
         b.pop();
         SPEC = b.build();
     }
