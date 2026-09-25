@@ -30,13 +30,19 @@ public final class ClientCommands {
 
         try {
             Map<String, Path> databases = DhClientLocator.locateLoadedDatabases();
+            String serverKey = ClientServerKeys.normalize(server.ip);
+
             Map<String, ClientSyncState.DimensionState> dimensions = new LinkedHashMap<>();
+            var existing = ClientSyncStateStore.find(ClientSyncStateStore.defaultPath(), serverKey);
+            if (existing.isPresent()) dimensions.putAll(existing.get().dimensions());
+
             for (Map.Entry<String, Path> entry : databases.entrySet()) {
-                // First managed sync intentionally has no baseline: it will require the trusted server bootstrap.
-                dimensions.put(entry.getKey(), new ClientSyncState.DimensionState(entry.getValue().toString(), null));
+                ClientSyncState.DimensionState old = dimensions.get(entry.getKey());
+                String baseline = old == null ? null : old.serverBaselineSha256();
+                // A newly discovered dimension intentionally starts without a baseline and will bootstrap once.
+                dimensions.put(entry.getKey(), new ClientSyncState.DimensionState(entry.getValue().toString(), baseline));
             }
 
-            String serverKey = ClientServerKeys.normalize(server.ip);
             ClientSyncState.ServerProfile profile = new ClientSyncState.ServerProfile(
                     serverKey,
                     ClientConfig.WORLD_ID.get(),
