@@ -41,12 +41,38 @@ public final class ClientRecoveryJournal {
             List<Entry> entries
     ) {}
 
-    public static Path pathFor(String serverAddress) {
+    public static Path recoveryDirectory() {
         return FMLPaths.GAMEDIR.get()
                 .resolve("gabcondhsync")
                 .resolve("recovery")
+                .toAbsolutePath().normalize();
+    }
+
+    public static Path pathFor(String serverAddress) {
+        return recoveryDirectory()
                 .resolve(keyHash(ClientSyncStateStore.normalizeServerAddress(serverAddress)) + ".json")
                 .toAbsolutePath().normalize();
+    }
+
+    public static int recoverAll() throws Exception {
+        Path root = recoveryDirectory();
+        if (!Files.isDirectory(root)) return 0;
+        int recovered = 0;
+        try (var stream = Files.list(root)) {
+            for (Path file : stream.filter(p -> p.getFileName().toString().endsWith(".json")).toList()) {
+                Journal journal;
+                try {
+                    journal = GSON.fromJson(Files.readString(file), Journal.class);
+                } catch (RuntimeException e) {
+                    throw new IOException("Unreadable GabCon recovery journal: " + file, e);
+                }
+                if (journal == null || journal.serverAddress() == null) {
+                    throw new IOException("Invalid GabCon recovery journal: " + file);
+                }
+                if (recoverIfPresent(journal.serverAddress())) recovered++;
+            }
+        }
+        return recovered;
     }
 
     public static void write(String serverAddress, Phase phase, ClientSyncState.ServerProfile previousProfile, List<Entry> entries)
