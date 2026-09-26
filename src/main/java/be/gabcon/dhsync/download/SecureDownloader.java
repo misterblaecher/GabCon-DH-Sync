@@ -38,6 +38,7 @@ public final class SecureDownloader {
         this.client = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(15))
                 .followRedirects(HttpClient.Redirect.NORMAL)
+                .version(HttpClient.Version.HTTP_1_1)
                 .executor(executor)
                 .build();
     }
@@ -57,6 +58,16 @@ public final class SecureDownloader {
         Files.createDirectories(request.targetDirectory());
         Path finalPath = SafePaths.resolveAsset(request.targetDirectory(), request.fileName());
         Path partPath = finalPath.resolveSibling(finalPath.getFileName() + ".part");
+
+        if (Files.isRegularFile(finalPath)) {
+            long finalSize = Files.size(finalPath);
+            if (finalSize == request.expectedSize()
+                    && Hashes.sha256(finalPath).equalsIgnoreCase(request.expectedSha256())) {
+                progress.accept(new DownloadProgress(finalSize, finalSize, 0.0, 0));
+                return finalPath;
+            }
+            Files.deleteIfExists(finalPath);
+        }
 
         if (Files.exists(partPath) && Files.size(partPath) == request.expectedSize()) {
             String hash = Hashes.sha256(partPath);
@@ -98,9 +109,10 @@ public final class SecureDownloader {
         HttpRequest.Builder builder = HttpRequest.newBuilder(request.uri())
                 .GET()
                 .timeout(Duration.ofSeconds(60))
-                .header("User-Agent", "GabConDHSync/0.5");
+                .header("User-Agent", "GabConDHSync/0.5.2");
         if (existing > 0) builder.header("Range", "bytes=" + existing + "-");
 
+        progress.accept(new DownloadProgress(existing, request.expectedSize(), 0.0, -1));
         HttpResponse<InputStream> response = client.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream());
         int status = response.statusCode();
         boolean append = existing > 0 && status == 206;
