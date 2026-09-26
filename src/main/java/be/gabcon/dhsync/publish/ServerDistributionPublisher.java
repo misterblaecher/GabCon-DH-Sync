@@ -104,19 +104,17 @@ public final class ServerDistributionPublisher {
         manifest = appended.manifest();
         counters = counters.add(appended.counters());
 
-        String json = DistributionManifestCodec.toJson(manifest, maxAssetBytes);
-        Path part = manifestPath.resolveSibling("manifest.json.part");
-        Files.writeString(part, json);
-        Files.move(part, manifestPath, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-
-        // Manifest is always replaced last. Clients never see a chain that references assets still uploading.
+        // Repair currently referenced legacy/corrupt assets without deleting names
+        // that the live manifest still references. Repairs are uploaded under fresh,
+        // content-addressed aliases and only become visible when manifest.json is
+        // atomically replaced at the very end.
         ServerState.MAINTENANCE_PROGRESS.updatePercent(
                 "manifest",
-                "Publishing manifest.json last",
+                "Verifying remote assets before manifest publication",
                 95
         );
         GitHubReleaseClient.Release refreshed = github.refresh(tag);
-        int repairedAssets = repairReferencedAssets(
+        RepairResult repair = repairReferencedAssets(
                 manifest,
                 github,
                 refreshed,
@@ -124,15 +122,25 @@ public final class ServerDistributionPublisher {
                 publishRoot,
                 Path.of("gabcondhsync").toAbsolutePath().normalize()
         );
-        if (repairedAssets > 0) {
-            counters = counters.add(new Counters(repairedAssets, 0));
+        manifest = repair.manifest();
+        if (repair.uploadedAssets() > 0 || repair.repointedAssets() > 0) {
+            counters = counters.add(new Counters(repair.uploadedAssets(), 0));
             GabConDhSync.LOGGER.info(
-                    "[GabConDHSync] Repaired {} legacy/missing referenced Release asset(s).",
-                    repairedAssets
+                    "[GabConDHSync] Repaired/repointed {} referenced Release asset(s), uploaded={}.",
+                    repair.repointedAssets(),
+                    repair.uploadedAssets()
             );
             refreshed = github.refresh(tag);
         }
+
         verifyReferencedAssets(manifest, github, refreshed);
+
+        String json = DistributionManifestCodec.toJson(manifest, maxAssetBytes);
+        Path part = manifestPath.resolveSibling("manifest.json.part");
+        Files.writeString(part, json);
+        Files.move(part, manifestPath, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+
+        // Manifest is always replaced last. Clients never see a chain that references assets still uploading.
         GabConDhSync.LOGGER.info("[GabConDHSync] Publishing manifest.json last after remote asset SHA-256 preflight.");
         github.uploadReplacing(
                 refreshed,
@@ -352,7 +360,13 @@ public final class ServerDistributionPublisher {
         return new AppendDeltaResult(updated, counters);
     }
 
-    static int repairReferencedAssets(
+    record RepairResult(
+            DistributionManifest manifest,
+            int uploadedAssets,
+            int repointedAssets
+    ) {}
+
+    static RepairResult repairReferencedAssets(
             DistributionManifest manifest,
             GitHubReleaseClient github,
             GitHubReleaseClient.Release release,
@@ -360,9 +374,14 @@ public final class ServerDistributionPublisher {
             Path publishRoot,
             Path dataRoot
     ) throws Exception {
-        int repaired = 0;
+        int uploaded = 0;
+        int repointed = 0;
         Path staging = publishRoot.toAbsolutePath().normalize().resolve("staging");
         Files.createDirectories(staging);
+
+        Map<String, GitHubReleaseClient.AssetInfo> knownAssets =
+                new LinkedHashMap<>(release.assetsByName());
+        Map<String, DistributionManifest.DimensionDistribution> dimensions = new LinkedHashMap<>();
 
         for (Map.Entry<String, DistributionManifest.DimensionDistribution> dimensionEntry
                 : manifest.dimensions().entrySet()) {
@@ -370,69 +389,179 @@ public final class ServerDistributionPublisher {
             DistributionManifest.DimensionDistribution distribution = dimensionEntry.getValue();
             DistributionManifest.BootstrapAsset bootstrap = distribution.bootstrap();
 
-            boolean bootstrapNeedsRepair = bootstrap.parts().stream().anyMatch(part ->
-                    !github.assetMatches(release, part.fileName(), part.size(), part.sha256()));
+            SnapshotAssetSource bootstrapSource = null;
+            long offset = 0L;
+            List<DistributionManifest.PartAsset> repairedParts = new ArrayList<>();
 
-            if (bootstrapNeedsRepair) {
-                SnapshotAssetSource source = findBootstrapSource(
-                        dataRoot, worldId, dimension, bootstrap.databaseSha256()
-                );
-                if (Files.size(source.path()) != bootstrap.totalSize()) {
-                    throw new IOException("Local bootstrap source size mismatch for " + dimension);
-                }
-                if (!Hashes.sha256(source.path()).equalsIgnoreCase(bootstrap.databaseSha256())) {
-                    throw new IOException("Local bootstrap source SHA mismatch for " + dimension);
-                }
+            for (DistributionManifest.PartAsset part : bootstrap.parts()) {
+                DistributionManifest.PartAsset effective = part;
+                GitHubReleaseClient.Release knownRelease =
+                        new GitHubReleaseClient.Release(release.id(), release.tag(), Map.copyOf(knownAssets));
 
-                long offset = 0L;
-                for (DistributionManifest.PartAsset part : bootstrap.parts()) {
-                    if (!github.assetMatches(release, part.fileName(), part.size(), part.sha256())) {
-                        Path temp = staging.resolve(part.fileName() + ".repair");
-                        Files.deleteIfExists(temp);
-                        writeSlice(source.path(), offset, part.size(), temp);
-                        try {
-                            if (Files.size(temp) != part.size()) {
-                                throw new IOException("Rebuilt bootstrap part size mismatch: " + part.fileName());
-                            }
-                            String sha = Hashes.sha256(temp);
-                            if (!sha.equalsIgnoreCase(part.sha256())) {
-                                throw new IOException("Rebuilt bootstrap part SHA mismatch: " + part.fileName());
-                            }
-                            github.uploadImmutable(
-                                    release,
-                                    part.fileName(),
+                if (!github.assetMatches(knownRelease, part.fileName(), part.size(), part.sha256())) {
+                    if (bootstrapSource == null) {
+                        bootstrapSource = findBootstrapSource(
+                                dataRoot, worldId, dimension, bootstrap.databaseSha256()
+                        );
+                        if (Files.size(bootstrapSource.path()) != bootstrap.totalSize()) {
+                            throw new IOException("Local bootstrap source size mismatch for " + dimension);
+                        }
+                        if (!Hashes.sha256(bootstrapSource.path()).equalsIgnoreCase(bootstrap.databaseSha256())) {
+                            throw new IOException("Local bootstrap source SHA mismatch for " + dimension);
+                        }
+                    }
+
+                    Path temp = staging.resolve(part.fileName() + ".repair");
+                    Files.deleteIfExists(temp);
+                    writeSlice(bootstrapSource.path(), offset, part.size(), temp);
+                    try {
+                        if (Files.size(temp) != part.size()) {
+                            throw new IOException("Rebuilt bootstrap part size mismatch: " + part.fileName());
+                        }
+                        String sha = Hashes.sha256(temp);
+                        if (!sha.equalsIgnoreCase(part.sha256())) {
+                            throw new IOException("Rebuilt bootstrap part SHA mismatch: " + part.fileName());
+                        }
+
+                        String replacementName = selectRepairAssetName(
+                                part.fileName(), part.sha256(), part.size(), github,
+                                release.id(), release.tag(), knownAssets
+                        );
+                        GitHubReleaseClient.Release latestKnown =
+                                new GitHubReleaseClient.Release(release.id(), release.tag(), Map.copyOf(knownAssets));
+                        if (!github.assetMatches(latestKnown, replacementName, part.size(), part.sha256())) {
+                            GitHubReleaseClient.AssetInfo info = github.uploadReplacing(
+                                    latestKnown,
+                                    replacementName,
                                     temp,
                                     "application/octet-stream",
                                     part.sha256()
                             );
-                            repaired++;
-                        } finally {
-                            Files.deleteIfExists(temp);
+                            knownAssets.put(replacementName, info);
+                            uploaded++;
                         }
+
+                        effective = new DistributionManifest.PartAsset(
+                                replacementName,
+                                part.size(),
+                                part.sha256(),
+                                github.assetUrl(manifest.releaseTag(), replacementName)
+                        );
+                        repointed++;
+                    } finally {
+                        Files.deleteIfExists(temp);
                     }
-                    offset = Math.addExact(offset, part.size());
                 }
-                if (offset != bootstrap.totalSize()) {
-                    throw new IOException("Bootstrap parts do not cover exact source size for " + dimension);
-                }
+                repairedParts.add(effective);
+                offset = Math.addExact(offset, part.size());
             }
 
+            if (offset != bootstrap.totalSize()) {
+                throw new IOException("Bootstrap parts do not cover exact source size for " + dimension);
+            }
+
+            DistributionManifest.BootstrapAsset repairedBootstrap =
+                    new DistributionManifest.BootstrapAsset(
+                            bootstrap.databaseFileName(),
+                            bootstrap.totalSize(),
+                            bootstrap.databaseSha256(),
+                            List.copyOf(repairedParts)
+                    );
+
+            List<DistributionManifest.DeltaAsset> repairedDeltas = new ArrayList<>();
             for (DistributionManifest.DeltaAsset delta : distribution.deltas()) {
-                if (github.assetMatches(release, delta.fileName(), delta.size(), delta.sha256())) {
-                    continue;
+                DistributionManifest.DeltaAsset effective = delta;
+                GitHubReleaseClient.Release knownRelease =
+                        new GitHubReleaseClient.Release(release.id(), release.tag(), Map.copyOf(knownAssets));
+
+                if (!github.assetMatches(knownRelease, delta.fileName(), delta.size(), delta.sha256())) {
+                    Path source = findDeltaSource(
+                            dataRoot, worldId, dimension, delta.sha256(), delta.size()
+                    );
+                    String replacementName = selectRepairAssetName(
+                            delta.fileName(), delta.sha256(), delta.size(), github,
+                            release.id(), release.tag(), knownAssets
+                    );
+                    GitHubReleaseClient.Release latestKnown =
+                            new GitHubReleaseClient.Release(release.id(), release.tag(), Map.copyOf(knownAssets));
+                    if (!github.assetMatches(latestKnown, replacementName, delta.size(), delta.sha256())) {
+                        GitHubReleaseClient.AssetInfo info = github.uploadReplacing(
+                                latestKnown,
+                                replacementName,
+                                source,
+                                "application/octet-stream",
+                                delta.sha256()
+                        );
+                        knownAssets.put(replacementName, info);
+                        uploaded++;
+                    }
+
+                    effective = new DistributionManifest.DeltaAsset(
+                            replacementName,
+                            delta.size(),
+                            delta.sha256(),
+                            github.assetUrl(manifest.releaseTag(), replacementName),
+                            delta.oldServerBaselineSha256(),
+                            delta.newServerBaselineSha256()
+                    );
+                    repointed++;
                 }
-                Path source = findDeltaSource(dataRoot, worldId, dimension, delta.sha256(), delta.size());
-                github.uploadImmutable(
-                        release,
-                        delta.fileName(),
-                        source,
-                        "application/octet-stream",
-                        delta.sha256()
-                );
-                repaired++;
+                repairedDeltas.add(effective);
+            }
+
+            dimensions.put(
+                    dimension,
+                    new DistributionManifest.DimensionDistribution(
+                            repairedBootstrap,
+                            List.copyOf(repairedDeltas)
+                    )
+            );
+        }
+
+        DistributionManifest repairedManifest = new DistributionManifest(
+                manifest.schemaVersion(),
+                manifest.worldId(),
+                manifest.minecraftVersion(),
+                manifest.neoforgeVersion(),
+                manifest.distantHorizonsVersion(),
+                manifest.distantHorizonsApiVersion(),
+                manifest.releaseTag(),
+                Map.copyOf(dimensions)
+        );
+        return new RepairResult(repairedManifest, uploaded, repointed);
+    }
+
+    private static String selectRepairAssetName(
+            String originalName,
+            String sha256,
+            long size,
+            GitHubReleaseClient github,
+            long releaseId,
+            String tag,
+            Map<String, GitHubReleaseClient.AssetInfo> knownAssets
+    ) throws IOException {
+        String shortSha = sha256.substring(0, 12).toLowerCase(java.util.Locale.ROOT);
+        for (int ordinal = 1; ordinal <= 10_000; ordinal++) {
+            String suffix = ".sha256-" + shortSha + (ordinal == 1 ? "" : "-" + ordinal);
+            String candidate = insertBeforeExtension(originalName, suffix);
+            if (candidate.equals(originalName)) continue;
+
+            GitHubReleaseClient.AssetInfo existing = knownAssets.get(candidate);
+            if (existing == null) return candidate;
+
+            GitHubReleaseClient.Release knownRelease =
+                    new GitHubReleaseClient.Release(releaseId, tag, Map.copyOf(knownAssets));
+            if (github.assetMatches(knownRelease, candidate, size, sha256)) {
+                return candidate;
             }
         }
-        return repaired;
+        throw new IOException("Unable to allocate non-destructive repair asset name for " + originalName);
+    }
+
+    private static String insertBeforeExtension(String fileName, String suffix) {
+        int dot = fileName.lastIndexOf('.');
+        if (dot <= 0) return fileName + suffix;
+        return fileName.substring(0, dot) + suffix + fileName.substring(dot);
     }
 
     private record SnapshotAssetSource(Path path, DhSnapshotService.SnapshotFile metadata) {}
