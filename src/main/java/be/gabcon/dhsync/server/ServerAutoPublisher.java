@@ -17,6 +17,8 @@ public final class ServerAutoPublisher {
 
     private static volatile ServerAutoPublishCoordinator coordinator;
     private static volatile ScheduledFuture<?> scheduled;
+    private static volatile Path dirtyMarker;
+    private static volatile boolean dirtyMarkerPresent;
 
     public static void start() {
         synchronized (LOCK) {
@@ -25,6 +27,14 @@ public final class ServerAutoPublisher {
             String worldId = ServerConfig.WORLD_ID.get();
             Path stateFile = Path.of("gabcondhsync", "auto-publish",
                     DhSnapshotService.safeStem(worldId) + ".json");
+            dirtyMarker = ServerDirtyMarker.pathFor(worldId);
+            dirtyMarkerPresent = ServerDirtyMarker.exists(dirtyMarker);
+            if (dirtyMarkerPresent && ServerState.CHANGED_REGIONS.pendingCount() == 0) {
+                // A persisted dirty marker means the previous process observed at least
+                // one unpublished save. A synthetic pending bucket forces a fresh
+                // snapshot even if the world stays quiet after restart.
+                ServerState.CHANGED_REGIONS.markChunkSaved("gabcondhsync:persisted-dirty", 0, 0);
+            }
 
             ServerAutoPublishCoordinator.Pipeline pipeline = new ServerAutoPublishCoordinator.Pipeline() {
                 @Override
@@ -94,6 +104,28 @@ public final class ServerAutoPublisher {
         }
     }
 
+    public static void recordChunkSaved(String dimension, int chunkX, int chunkZ) {
+        synchronized (LOCK) {
+            Path marker = dirtyMarker;
+            if (marker == null) {
+                marker = ServerDirtyMarker.pathFor(ServerConfig.WORLD_ID.get());
+                dirtyMarker = marker;
+                dirtyMarkerPresent = ServerDirtyMarker.exists(marker);
+            }
+            if (!dirtyMarkerPresent) {
+                try {
+                    // Persist before publishing the in-memory change. A crash between
+                    // these operations causes at worst one conservative extra snapshot.
+                    ServerDirtyMarker.mark(marker);
+                    dirtyMarkerPresent = true;
+                } catch (Exception e) {
+                    GabConDhSync.LOGGER.error("[GabConDHSync] Failed to persist auto-publish dirty marker", e);
+                }
+            }
+            ServerState.CHANGED_REGIONS.markChunkSaved(dimension, chunkX, chunkZ);
+        }
+    }
+
     public static String statusSummary() {
         ServerAutoPublishCoordinator current = coordinator;
         if (current == null) return "autoPhase=stopped";
@@ -137,6 +169,18 @@ public final class ServerAutoPublisher {
                     ServerState.MAINTENANCE_PROGRESS.complete(
                             "automatic snapshot/delta/publication completed"
                     );
+                    synchronized (LOCK) {
+                        if (ServerState.CHANGED_REGIONS.pendingCount() == 0 && dirtyMarkerPresent) {
+                            try {
+                                ServerDirtyMarker.clear(dirtyMarker);
+                                dirtyMarkerPresent = false;
+                            } catch (Exception e) {
+                                GabConDhSync.LOGGER.warn(
+                                        "[GabConDHSync] Auto-publish succeeded but dirty marker cleanup failed", e
+                                );
+                            }
+                        }
+                    }
                     GabConDhSync.LOGGER.info(
                             "[GabConDHSync] Auto-publish complete; remaining pending buckets={}.",
                             ServerState.CHANGED_REGIONS.pendingCount()
