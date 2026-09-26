@@ -99,16 +99,46 @@ class ServerAutoPublishCoordinatorTest {
     }
 
     @Test
-    void intervalTriggersBelowThreshold() throws Exception {
-        ChangedRegionTracker tracker = new ChangedRegionTracker(40L);
+    void intervalTriggersBelowThresholdFromOldestPendingChange() throws Exception {
+        MutableClock clock = new MutableClock(Instant.parse("2026-09-26T12:00:00Z"));
+        ChangedRegionTracker tracker = new ChangedRegionTracker(40L, clock);
         tracker.markChunkSaved("minecraft:overworld", 0, 0);
 
-        MutableClock clock = new MutableClock(Instant.now().plus(Duration.ofMinutes(31)));
-        FakePipeline pipeline = new FakePipeline();
-        pipeline.snapshot = "/snapshots/current";
+        clock.advance(Duration.ofMinutes(29));
+        tracker.markChunkSaved("minecraft:overworld", 0, 0);
+        assertFalse(coordinator(tracker, clock, new FakePipeline())
+                .isDue(32, Duration.ofMinutes(30)));
 
+        clock.advance(Duration.ofMinutes(2));
+        assertTrue(coordinator(tracker, clock, new FakePipeline())
+                .isDue(32, Duration.ofMinutes(30)),
+                "re-saving the same pending region must not postpone its original deadline");
+    }
+
+    @Test
+    void newCycleReResolvesPublicationBaseAfterManualAdvance() throws Exception {
+        MutableClock clock = new MutableClock(Instant.parse("2026-09-26T12:00:00Z"));
+        ChangedRegionTracker tracker = new ChangedRegionTracker(50L, clock);
+        FakePipeline pipeline = new FakePipeline();
+        pipeline.base = "/snapshots/base-a";
+        pipeline.snapshot = "/snapshots/auto-a";
+        pipeline.delta = "/deltas/a";
+
+        tracker.markChunkSaved("minecraft:overworld", 0, 0);
         ServerAutoPublishCoordinator coordinator = coordinator(tracker, clock, pipeline);
-        assertTrue(coordinator.isDue(32, Duration.ofMinutes(30)));
+        assertTrue(coordinator.runIfDue(1, Duration.ofMinutes(30)).success());
+        assertEquals("/snapshots/base-a", pipeline.lastDeltaBase);
+
+        // Simulate a supported manual snapshot/delta/publish that advances the
+        // publication baseline between automatic cycles.
+        pipeline.base = "/snapshots/manual-b";
+        pipeline.snapshot = "/snapshots/auto-c";
+        pipeline.delta = "/deltas/b-c";
+        tracker.markChunkSaved("minecraft:overworld", 64, 64);
+
+        assertTrue(coordinator.runIfDue(1, Duration.ofMinutes(30)).success());
+        assertEquals(2, pipeline.resolveCalls);
+        assertEquals("/snapshots/manual-b", pipeline.lastDeltaBase);
     }
 
     @Test
@@ -169,6 +199,7 @@ class ServerAutoPublishCoordinatorTest {
         int deltaCalls;
         int publishCalls;
         int verifyCalls;
+        String lastDeltaBase;
         Runnable onPublish;
 
         @Override
@@ -186,6 +217,7 @@ class ServerAutoPublishCoordinatorTest {
         @Override
         public String buildDelta(String baseSnapshotDirectory, String currentSnapshotDirectory) throws Exception {
             deltaCalls++;
+            lastDeltaBase = baseSnapshotDirectory;
             if (failDelta) throw new Exception("delta failed");
             return delta;
         }
