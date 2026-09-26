@@ -17,6 +17,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -133,29 +134,55 @@ public final class ClientSyncEngine {
             Path downloadRoot,
             ProgressSink sink
     ) throws Exception {
-        Map<String, CompletableFuture<Path>> futures = new HashMap<>();
+        record PendingAsset(String url, String fileName, long size, String sha256) {}
+
+        Map<String, PendingAsset> pending = new LinkedHashMap<>();
         long maxBytes = ClientConfig.MAX_DOWNLOAD_BYTES.get();
 
         for (ClientSyncPlanner.DimensionPlan dimension : plan.dimensions()) {
             if (dimension.bootstrap() != null) {
                 for (DistributionManifest.PartAsset part : dimension.bootstrap().parts()) {
-                    futures.computeIfAbsent(part.fileName(), ignored -> startDownload(
-                            part.url(), part.fileName(), part.size(), part.sha256(), maxBytes, downloadRoot, sink
-                    ));
+                    pending.putIfAbsent(part.fileName(),
+                            new PendingAsset(part.url(), part.fileName(), part.size(), part.sha256()));
                 }
             }
             for (DistributionManifest.DeltaAsset delta : dimension.deltas()) {
-                futures.computeIfAbsent(delta.fileName(), ignored -> startDownload(
-                        delta.url(), delta.fileName(), delta.size(), delta.sha256(), maxBytes, downloadRoot, sink
-                ));
+                pending.putIfAbsent(delta.fileName(),
+                        new PendingAsset(delta.url(), delta.fileName(), delta.size(), delta.sha256()));
             }
         }
 
-        CompletableFuture.allOf(futures.values().toArray(CompletableFuture[]::new)).join();
+        List<PendingAsset> assets = List.copyOf(pending.values());
         Map<String, Path> result = new HashMap<>();
-        for (Map.Entry<String, CompletableFuture<Path>> entry : futures.entrySet()) {
-            result.put(entry.getKey(), entry.getValue().join());
+        int batchSize = Math.max(1, ClientConfig.MAX_CONCURRENT_DOWNLOADS.get());
+
+        for (int offset = 0; offset < assets.size(); offset += batchSize) {
+            int end = Math.min(offset + batchSize, assets.size());
+            List<PendingAsset> batch = assets.subList(offset, end);
+            List<CompletableFuture<Path>> futures = new ArrayList<>(batch.size());
+
+            for (PendingAsset asset : batch) {
+                sink.update("download", asset.fileName(), 0, asset.size());
+                futures.add(startDownload(
+                        asset.url(), asset.fileName(), asset.size(), asset.sha256(),
+                        maxBytes, downloadRoot, sink
+                ));
+            }
+
+            try {
+                CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new)).join();
+            } catch (java.util.concurrent.CompletionException e) {
+                for (CompletableFuture<Path> future : futures) future.cancel(true);
+                Throwable cause = e.getCause();
+                if (cause instanceof Exception exception) throw exception;
+                throw e;
+            }
+
+            for (int i = 0; i < batch.size(); i++) {
+                result.put(batch.get(i).fileName(), futures.get(i).join());
+            }
         }
+
         return Map.copyOf(result);
     }
 
