@@ -73,7 +73,7 @@ public final class ServerAutoPublishCoordinator {
         if (tracker.pendingCount() == 0) return false;
         if (tracker.pendingCount() >= changedRegionThreshold) return true;
 
-        Instant changed = tracker.lastChange();
+        Instant changed = tracker.oldestPendingChange();
         return changed != null && !changed.plus(interval).isAfter(now);
     }
 
@@ -102,10 +102,10 @@ public final class ServerAutoPublishCoordinator {
             }
 
             if (state.phase() == ServerAutoPublishStateStore.Phase.CAPTURED) {
-                String base = state.lastPublishedSnapshotDirectory();
-                if (base == null || base.isBlank()) {
-                    base = pipeline.resolvePublicationBase();
-                }
+                // Always re-resolve at the start of a new cycle. A supported manual
+                // snapshot/delta/publish may have advanced the manifest since the
+                // previous automatic success.
+                String base = pipeline.resolvePublicationBase();
                 state = state.withPhase(
                         ServerAutoPublishStateStore.Phase.BASE_RESOLVED,
                         state.capturedWatermark(),
@@ -201,8 +201,8 @@ public final class ServerAutoPublishCoordinator {
                 if (attempt != null) next = attempt.plus(interval).toString();
             } else if (state.phase() == ServerAutoPublishStateStore.Phase.IDLE
                     && tracker.pendingCount() > 0
-                    && tracker.lastChange() != null) {
-                next = tracker.lastChange().plus(interval).toString();
+                    && tracker.oldestPendingChange() != null) {
+                next = tracker.oldestPendingChange().plus(interval).toString();
             }
             return new Status(
                     state.phase().name(),
