@@ -69,7 +69,8 @@ public final class ClientSyncEngine {
 
         Map<String, Path> downloaded = downloadAssets(plan, downloadRoot, sink);
 
-        boolean incrementalOnly = plan.dimensions().stream()
+        boolean incrementalOnly = ClientConfig.COMPACT_INCREMENTAL_APPLY.get()
+                && plan.dimensions().stream()
                 .filter(ClientSyncPlanner.DimensionPlan::needsWork)
                 .allMatch(dimension -> dimension.bootstrap() == null);
         if (incrementalOnly) {
