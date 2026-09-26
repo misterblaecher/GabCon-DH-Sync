@@ -217,12 +217,15 @@ public final class GitHubReleaseClient {
         }
 
         String digest = nullToEmpty(info.digest());
-        if (!digest.isBlank()) {
-            String actual = "sha256:" + sha256(bytes);
-            if (!actual.equalsIgnoreCase(digest)) {
-                throw new IOException("GitHub Release asset SHA-256 mismatch while downloading "
-                        + assetName + ": expected=" + digest + ", actual=" + actual);
-            }
+        if (digest.isBlank()) {
+            throw new IOException(
+                    "GitHub Release asset has no verifiable SHA-256 digest: " + assetName
+            );
+        }
+        String actual = "sha256:" + sha256(bytes);
+        if (!actual.equalsIgnoreCase(digest)) {
+            throw new IOException("GitHub Release asset SHA-256 mismatch while downloading "
+                    + assetName + ": expected=" + digest + ", actual=" + actual);
         }
         return new String(bytes, StandardCharsets.UTF_8);
     }
