@@ -114,8 +114,15 @@ public final class ServerDistributionPublisher {
                 95
         );
         GitHubReleaseClient.Release refreshed = github.refresh(tag);
-        GabConDhSync.LOGGER.info("[GabConDHSync] Publishing manifest.json last.");
-        github.uploadReplacing(refreshed, "manifest.json", manifestPath, "application/json");
+        verifyReferencedAssets(manifest, github, refreshed);
+        GabConDhSync.LOGGER.info("[GabConDHSync] Publishing manifest.json last after remote asset SHA-256 preflight.");
+        github.uploadReplacing(
+                refreshed,
+                "manifest.json",
+                manifestPath,
+                "application/json",
+                Hashes.sha256(manifestPath)
+        );
         GabConDhSync.LOGGER.info("[GabConDHSync] Published manifest.json.");
 
         return new PublicationResult(
@@ -193,7 +200,9 @@ public final class ServerDistributionPublisher {
                     );
                     GabConDhSync.LOGGER.info("[GabConDHSync] Publishing bootstrap asset {}/{}: {} ({} bytes)",
                             index + 1, partCount, name, written);
-                    boolean uploaded = github.uploadImmutable(release, name, temp, "application/octet-stream");
+                    boolean uploaded = github.uploadImmutable(
+                            release, name, temp, "application/octet-stream", sha
+                    );
                     if (uploaded) {
                         GabConDhSync.LOGGER.info("[GabConDHSync] Uploaded bootstrap asset: {}", name);
                     } else {
@@ -287,7 +296,9 @@ public final class ServerDistributionPublisher {
                         85
                 );
                 GabConDhSync.LOGGER.info("[GabConDHSync] Publishing delta asset: {} ({} bytes)", remoteName, file.size());
-                boolean uploaded = github.uploadImmutable(release, remoteName, source, "application/octet-stream");
+                boolean uploaded = github.uploadImmutable(
+                        release, remoteName, source, "application/octet-stream", file.sha256()
+                );
                 if (uploaded) {
                     GabConDhSync.LOGGER.info("[GabConDHSync] Uploaded delta asset: {}", remoteName);
                 } else {
@@ -321,6 +332,21 @@ public final class ServerDistributionPublisher {
         );
         DistributionManifestCodec.validate(updated, maxAssetBytes);
         return new AppendDeltaResult(updated, counters);
+    }
+
+    static void verifyReferencedAssets(
+            DistributionManifest manifest,
+            GitHubReleaseClient github,
+            GitHubReleaseClient.Release release
+    ) throws IOException {
+        for (DistributionManifest.DimensionDistribution dimension : manifest.dimensions().values()) {
+            for (DistributionManifest.PartAsset part : dimension.bootstrap().parts()) {
+                github.requireAsset(release, part.fileName(), part.size(), part.sha256());
+            }
+            for (DistributionManifest.DeltaAsset delta : dimension.deltas()) {
+                github.requireAsset(release, delta.fileName(), delta.size(), delta.sha256());
+            }
+        }
     }
 
     private static SnapshotRef oldestSnapshot(String worldId) throws Exception {
