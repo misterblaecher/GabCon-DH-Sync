@@ -254,6 +254,18 @@ Un test réel Windows/Java 21 a montré un cas où `manifest.json` était access
 - téléchargement par petits lots limités à `maxConcurrentDownloads` : un échec empêche de lancer les lots suivants ;
 - valeur par défaut `maxConcurrentDownloads=1` pour les gros assets Release.
 
+## Validation réelle du bootstrap client 0.5.3
+
+Le bootstrap pré-connexion réel a réussi sur le client Windows/Java 21 avec 0.5.3-mvp :
+
+- écran GabCon pré-connexion affiché ;
+- téléchargement du bootstrap terminé ;
+- application/commit terminés ;
+- connexion Minecraft reprise ensuite ;
+- `/gabcondhsyncclient status` affiche désormais `baselines=1` pour `worldId=gabcon-main`.
+
+Cela valide le flux réel `manifest -> bootstrap -> delta chain -> apply -> commit -> connect` sur une DB DH cliente connue.
+
 ## Test réel 0.5 restant avant merge
 
 1. Installer 0.5 serveur + client.
