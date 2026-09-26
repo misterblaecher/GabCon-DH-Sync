@@ -308,6 +308,11 @@ class GitHubReleaseClientDigestTest {
                 )
         );
 
+        String repairedBootstrapName =
+                "bootstrap.sha256-" + bootstrapSha.substring(0, 12) + ".part";
+        String repairedDeltaName =
+                "delta.sha256-" + deltaSha.substring(0, 12) + ".sqlite";
+
         AtomicInteger deletes = new AtomicInteger();
         AtomicInteger uploads = new AtomicInteger();
         GitHubReleaseClient client = client(exchange -> {
@@ -319,14 +324,14 @@ class GitHubReleaseClientDigestTest {
             if ("POST".equals(exchange.getRequestMethod())) {
                 uploads.incrementAndGet();
                 String query = exchange.getRequestURI().getRawQuery();
-                if (query != null && query.contains("bootstrap.part")) {
+                if (query != null && query.contains(repairedBootstrapName)) {
                     respond(exchange, 201,
-                            uploadedJson("bootstrap.part", 11L, bootstrapSize, "sha256:" + bootstrapSha));
+                            uploadedJson(repairedBootstrapName, 11L, bootstrapSize, "sha256:" + bootstrapSha));
                     return;
                 }
-                if (query != null && query.contains("delta.sqlite")) {
+                if (query != null && query.contains(repairedDeltaName)) {
                     respond(exchange, 201,
-                            uploadedJson("delta.sqlite", 12L, deltaSize, "sha256:" + deltaSha));
+                            uploadedJson(repairedDeltaName, 12L, deltaSize, "sha256:" + deltaSha));
                     return;
                 }
             }
@@ -342,18 +347,25 @@ class GitHubReleaseClientDigestTest {
                 )
         );
 
-        int repaired = ServerDistributionPublisher.repairReferencedAssets(
-                manifest,
-                client,
-                legacyRelease,
-                "gabcon-main",
-                publishRoot,
-                dataRoot
-        );
+        ServerDistributionPublisher.RepairResult repair =
+                ServerDistributionPublisher.repairReferencedAssets(
+                        manifest,
+                        client,
+                        legacyRelease,
+                        "gabcon-main",
+                        publishRoot,
+                        dataRoot
+                );
 
-        assertEquals(2, repaired);
-        assertEquals(1, deletes.get(), "legacy bootstrap with null digest must be replaced");
+        assertEquals(2, repair.uploadedAssets());
+        assertEquals(2, repair.repointedAssets());
+        assertEquals(0, deletes.get(),
+                "assets referenced by the live manifest must remain available during repair");
         assertEquals(2, uploads.get(), "legacy bootstrap and missing delta must both be repaired");
+
+        var repairedDistribution = repair.manifest().dimensions().get("minecraft:overworld");
+        assertEquals(repairedBootstrapName, repairedDistribution.bootstrap().parts().getFirst().fileName());
+        assertEquals(repairedDeltaName, repairedDistribution.deltas().getFirst().fileName());
         assertFalse(Files.exists(publishRoot.resolve("staging").resolve("bootstrap.part.repair")));
     }
 
