@@ -1,7 +1,10 @@
 package be.gabcon.dhsync.publish;
 
 import be.gabcon.dhsync.distribution.DistributionManifest;
+import be.gabcon.dhsync.server.DhDeltaBuilder;
+import be.gabcon.dhsync.server.DhSnapshotService;
 import be.gabcon.dhsync.util.Hashes;
+import com.google.gson.GsonBuilder;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
@@ -14,6 +17,7 @@ import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -209,6 +213,190 @@ class GitHubReleaseClientDigestTest {
 
         assertDoesNotThrow(() ->
                 ServerDistributionPublisher.verifyReferencedAssets(manifest, client, release));
+    }
+
+    @Test
+    void repairPassReuploadsLegacyBootstrapAndMissingDeltaFromLocalSources() throws Exception {
+        Path dataRoot = temp.resolve("data");
+        Path publishRoot = dataRoot.resolve("publish").resolve("gabcon-main");
+        Path snapshotDir = dataRoot.resolve("snapshots").resolve("gabcon-main").resolve("20260926-120000");
+        Path deltaDir = dataRoot.resolve("deltas").resolve("gabcon-main").resolve("20260926-120000--20260926-121000");
+        Files.createDirectories(snapshotDir);
+        Files.createDirectories(deltaDir);
+
+        Path bootstrapDb = snapshotDir.resolve("minecraft_overworld.sqlite");
+        Files.writeString(bootstrapDb, "abcdefghij");
+        String bootstrapSha = Hashes.sha256(bootstrapDb);
+        long bootstrapSize = Files.size(bootstrapDb);
+
+        var snapshotFile = new DhSnapshotService.SnapshotFile(
+                "minecraft:overworld",
+                "minecraft:overworld",
+                bootstrapDb.getFileName().toString(),
+                bootstrapSize,
+                bootstrapSha
+        );
+        var snapshotManifest = new DhSnapshotService.SnapshotManifest(
+                1,
+                "gabcon-main",
+                Instant.parse("2026-09-26T12:00:00Z").toString(),
+                "3.3.2",
+                "7.2.0",
+                List.of(snapshotFile)
+        );
+        Files.writeString(
+                snapshotDir.resolve("snapshot.json"),
+                new GsonBuilder().create().toJson(snapshotManifest)
+        );
+
+        Path localDelta = deltaDir.resolve("minecraft_overworld.delta.sqlite");
+        Files.writeString(localDelta, "01234567890123456789");
+        String deltaSha = Hashes.sha256(localDelta);
+        long deltaSize = Files.size(localDelta);
+        var deltaFile = new DhDeltaBuilder.DeltaFile(
+                "minecraft:overworld",
+                localDelta.getFileName().toString(),
+                deltaSize,
+                deltaSha,
+                List.of()
+        );
+        var deltaManifest = new DhDeltaBuilder.DeltaManifest(
+                1,
+                "gabcon-main",
+                "2026-09-26T12:00:00Z",
+                "2026-09-26T12:10:00Z",
+                "3.3.2",
+                "7.2.0",
+                List.of(deltaFile)
+        );
+        Files.writeString(
+                deltaDir.resolve("delta.json"),
+                new GsonBuilder().create().toJson(deltaManifest)
+        );
+
+        var part = new DistributionManifest.PartAsset(
+                "bootstrap.part",
+                bootstrapSize,
+                bootstrapSha,
+                "https://example.org/bootstrap.part"
+        );
+        var bootstrap = new DistributionManifest.BootstrapAsset(
+                bootstrapDb.getFileName().toString(),
+                bootstrapSize,
+                bootstrapSha,
+                List.of(part)
+        );
+        var delta = new DistributionManifest.DeltaAsset(
+                "delta.sqlite",
+                deltaSize,
+                deltaSha,
+                "https://example.org/delta.sqlite",
+                bootstrapSha,
+                "d".repeat(64)
+        );
+        var manifest = new DistributionManifest(
+                2,
+                "gabcon-main",
+                "1.21.1",
+                "21.1.251",
+                "3.3.2",
+                "7.2.0",
+                "tag",
+                Map.of(
+                        "minecraft:overworld",
+                        new DistributionManifest.DimensionDistribution(bootstrap, List.of(delta))
+                )
+        );
+
+        AtomicInteger deletes = new AtomicInteger();
+        AtomicInteger uploads = new AtomicInteger();
+        GitHubReleaseClient client = client(exchange -> {
+            if ("DELETE".equals(exchange.getRequestMethod())) {
+                deletes.incrementAndGet();
+                respond(exchange, 204, "");
+                return;
+            }
+            if ("POST".equals(exchange.getRequestMethod())) {
+                uploads.incrementAndGet();
+                String query = exchange.getRequestURI().getRawQuery();
+                if (query != null && query.contains("bootstrap.part")) {
+                    respond(exchange, 201,
+                            uploadedJson("bootstrap.part", 11L, bootstrapSize, "sha256:" + bootstrapSha));
+                    return;
+                }
+                if (query != null && query.contains("delta.sqlite")) {
+                    respond(exchange, 201,
+                            uploadedJson("delta.sqlite", 12L, deltaSize, "sha256:" + deltaSha));
+                    return;
+                }
+            }
+            respond(exchange, 404, "{}");
+        });
+
+        var legacyRelease = new GitHubReleaseClient.Release(
+                1L,
+                "tag",
+                Map.of(
+                        "bootstrap.part",
+                        new GitHubReleaseClient.AssetInfo(10L, bootstrapSize, null)
+                )
+        );
+
+        int repaired = ServerDistributionPublisher.repairReferencedAssets(
+                manifest,
+                client,
+                legacyRelease,
+                "gabcon-main",
+                publishRoot,
+                dataRoot
+        );
+
+        assertEquals(2, repaired);
+        assertEquals(1, deletes.get(), "legacy bootstrap with null digest must be replaced");
+        assertEquals(2, uploads.get(), "legacy bootstrap and missing delta must both be repaired");
+        assertFalse(Files.exists(publishRoot.resolve("staging").resolve("bootstrap.part.repair")));
+    }
+
+    @Test
+    void repairPassFailsClosedWhenLocalSourceWasLost() throws Exception {
+        String partSha = "a".repeat(64);
+        var part = new DistributionManifest.PartAsset(
+                "bootstrap.part", 10L, partSha, "https://example.org/bootstrap.part"
+        );
+        var bootstrap = new DistributionManifest.BootstrapAsset(
+                "DistantHorizons.sqlite", 10L, partSha, List.of(part)
+        );
+        var manifest = new DistributionManifest(
+                2,
+                "gabcon-main",
+                "1.21.1",
+                "21.1.251",
+                "3.3.2",
+                "7.2.0",
+                "tag",
+                Map.of("minecraft:overworld",
+                        new DistributionManifest.DimensionDistribution(bootstrap, List.of()))
+        );
+
+        GitHubReleaseClient client = new GitHubReleaseClient(
+                "owner/repo",
+                "token",
+                HttpClient.newHttpClient(),
+                "http://127.0.0.1:1",
+                "http://127.0.0.1:1"
+        );
+
+        IOException ex = assertThrows(IOException.class, () ->
+                ServerDistributionPublisher.repairReferencedAssets(
+                        manifest,
+                        client,
+                        new GitHubReleaseClient.Release(1L, "tag", Map.of()),
+                        "gabcon-main",
+                        temp.resolve("publish"),
+                        temp.resolve("missing-data-root")
+                )
+        );
+        assertTrue(ex.getMessage().contains("No local snapshot"));
     }
 
     private GitHubReleaseClient client(Handler handler) throws Exception {
