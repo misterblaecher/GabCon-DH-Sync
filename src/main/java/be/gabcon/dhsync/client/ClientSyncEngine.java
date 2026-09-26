@@ -215,7 +215,7 @@ public final class ClientSyncEngine {
                             0,
                             0
                     );
-                    DhDeltaApplier.WorkingApplyResult applied = DhDeltaApplier.applyToWorkingCopy(
+                    DhDeltaApplier.WorkingApplyResult applied = DhDeltaApplier.applyToPrecheckedWorkingCopy(
                             target,
                             deltaPath,
                             baseline
