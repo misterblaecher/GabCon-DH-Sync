@@ -7,6 +7,7 @@ import be.gabcon.dhsync.download.DownloadRequest;
 import be.gabcon.dhsync.download.SecureDownloader;
 import be.gabcon.dhsync.server.DhCompatibility;
 import be.gabcon.dhsync.sync.DhDeltaApplier;
+import be.gabcon.dhsync.sync.DhReverseDeltaBuilder;
 import net.minecraft.SharedConstants;
 import net.neoforged.fml.ModList;
 import net.neoforged.fml.loading.FMLPaths;
@@ -43,6 +44,7 @@ public final class ClientSyncEngine {
 
     public SyncResult sync(ClientSyncState.ServerProfile profile, ProgressSink progress) throws Exception {
         ProgressSink sink = progress == null ? (a, b, c, d) -> {} : progress;
+        ClientIncrementalRecoveryJournal.recoverIfPresent(profile.serverAddress());
         ClientRecoveryJournal.recoverIfPresent(profile.serverAddress());
 
         sink.update("manifest", "Downloading distribution manifest", 0, 0);
@@ -66,6 +68,16 @@ public final class ClientSyncEngine {
         Files.createDirectories(downloadRoot);
 
         Map<String, Path> downloaded = downloadAssets(plan, downloadRoot, sink);
+
+        boolean incrementalOnly = plan.dimensions().stream()
+                .filter(ClientSyncPlanner.DimensionPlan::needsWork)
+                .allMatch(dimension -> dimension.bootstrap() == null);
+        if (incrementalOnly) {
+            SyncResult result = applyIncrementalDirect(profile, plan, downloaded, sink);
+            cleanupDownloaded(downloaded);
+            return result;
+        }
+
         List<ClientDatabaseCommitter.PreparedDimension> prepared = new ArrayList<>();
 
         try {
@@ -122,11 +134,7 @@ public final class ClientSyncEngine {
             ClientDatabaseCommitter.CommitResult committed = ClientDatabaseCommitter.commit(profile, prepared);
             sink.update("done", "Distant Horizons sync complete", prepared.size(), prepared.size());
 
-            for (Path asset : downloaded.values()) {
-                try {
-                    Files.deleteIfExists(asset);
-                } catch (IOException ignored) {}
-            }
+            cleanupDownloaded(downloaded);
             return new SyncResult(true, committed.profile(), committed.rollbackFiles());
         } catch (Exception e) {
             for (ClientDatabaseCommitter.PreparedDimension dimension : prepared) {
@@ -135,6 +143,138 @@ public final class ClientSyncEngine {
                 } catch (IOException ignored) {}
             }
             throw e;
+        }
+    }
+
+    private SyncResult applyIncrementalDirect(
+            ClientSyncState.ServerProfile profile,
+            ClientSyncPlanner.SyncPlan plan,
+            Map<String, Path> downloaded,
+            ProgressSink sink
+    ) throws Exception {
+        List<ClientIncrementalRecoveryJournal.Entry> journalEntries = new ArrayList<>();
+        Map<String, ClientSyncState.DimensionState> dimensions =
+                new LinkedHashMap<>(profile.dimensions());
+        int rollbackIndex = 0;
+
+        try {
+            for (ClientSyncPlanner.DimensionPlan dimension : plan.dimensions()) {
+                if (!dimension.needsWork()) continue;
+                if (dimension.bootstrap() != null) {
+                    throw new IllegalStateException("Incremental fast path cannot process a bootstrap");
+                }
+
+                Path target = dimension.databasePath().toAbsolutePath().normalize();
+                DhOfflineFiles.requireInactive(target);
+                String baseline = dimension.startingBaselineSha256();
+                if (baseline == null) {
+                    throw new IllegalStateException("Missing incremental baseline for " + dimension.dimension());
+                }
+
+                for (var delta : dimension.deltas()) {
+                    Path deltaPath = required(downloaded, delta.fileName());
+                    Path reversePath = ClientIncrementalRecoveryJournal.reverseDeltaPath(
+                            profile.serverAddress(),
+                            dimension.dimension(),
+                            rollbackIndex++
+                    );
+
+                    sink.update(
+                            "prepare",
+                            dimension.dimension() + " — building compact rollback",
+                            0,
+                            0
+                    );
+                    DhReverseDeltaBuilder.Result reverse = DhReverseDeltaBuilder.build(
+                            target,
+                            deltaPath,
+                            reversePath,
+                            baseline
+                    );
+
+                    ClientIncrementalRecoveryJournal.Entry entry =
+                            new ClientIncrementalRecoveryJournal.Entry(
+                                    dimension.dimension(),
+                                    target.toString(),
+                                    reverse.rollbackDelta().toString(),
+                                    reverse.baselineBefore(),
+                                    reverse.baselineAfter()
+                            );
+                    journalEntries.add(entry);
+                    ClientIncrementalRecoveryJournal.write(
+                            profile.serverAddress(),
+                            ClientIncrementalRecoveryJournal.Phase.APPLYING,
+                            profile,
+                            journalEntries
+                    );
+
+                    sink.update(
+                            "apply",
+                            dimension.dimension() + " / " + delta.fileName(),
+                            0,
+                            0
+                    );
+                    DhDeltaApplier.WorkingApplyResult applied = DhDeltaApplier.applyToWorkingCopy(
+                            target,
+                            deltaPath,
+                            baseline
+                    );
+                    baseline = applied.nextServerBaselineSha256();
+                }
+
+                if (!baseline.equalsIgnoreCase(dimension.targetBaselineSha256())) {
+                    throw new IllegalStateException(
+                            "Incremental baseline mismatch for " + dimension.dimension()
+                    );
+                }
+
+                ClientSyncState.DimensionState old = dimensions.get(dimension.dimension());
+                if (old == null) {
+                    throw new IllegalStateException("Incremental dimension is not registered: " + dimension.dimension());
+                }
+                dimensions.put(
+                        dimension.dimension(),
+                        new ClientSyncState.DimensionState(old.databasePath(), baseline)
+                );
+            }
+
+            ClientSyncState.ServerProfile updated = new ClientSyncState.ServerProfile(
+                    profile.serverAddress(),
+                    profile.worldId(),
+                    profile.manifestUrl(),
+                    Map.copyOf(dimensions)
+            );
+
+            sink.update("commit", "Committing compact incremental sync", 0, journalEntries.size());
+            ClientSyncStateStore.upsert(ClientSyncStateStore.defaultPath(), updated);
+            ClientIncrementalRecoveryJournal.write(
+                    profile.serverAddress(),
+                    ClientIncrementalRecoveryJournal.Phase.STATE_COMMITTED,
+                    profile,
+                    journalEntries
+            );
+            ClientIncrementalRecoveryJournal.cleanupReverseDeltas(journalEntries);
+            ClientIncrementalRecoveryJournal.delete(profile.serverAddress());
+
+            sink.update("done", "Distant Horizons incremental sync complete", journalEntries.size(), journalEntries.size());
+            return new SyncResult(true, updated, List.of());
+        } catch (Exception failure) {
+            try {
+                ClientIncrementalRecoveryJournal.recoverIfPresent(profile.serverAddress());
+            } catch (Exception recoveryFailure) {
+                failure.addSuppressed(recoveryFailure);
+            }
+            throw failure;
+        }
+    }
+
+    private static void cleanupDownloaded(Map<String, Path> downloaded) {
+        for (Path asset : downloaded.values()) {
+            try {
+                Files.deleteIfExists(asset);
+            } catch (IOException ignored) {
+                // A stale validated asset is harmless and may be reused by a later sync.
+            }
         }
     }
 
