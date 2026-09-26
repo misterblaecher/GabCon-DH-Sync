@@ -52,6 +52,27 @@ class SecureDownloaderTest {
     private static String sha(byte[] data) throws Exception { Path p=Files.createTempFile("hash",".bin"); try { Files.write(p,data); return Hashes.sha256(p);} finally {Files.deleteIfExists(p);} }
     private static void serveRangeAware(HttpExchange exchange,byte[] data)throws IOException { String range=exchange.getRequestHeaders().getFirst("Range"); if(range!=null&&range.startsWith("bytes=")){int start=Integer.parseInt(range.substring("bytes=".length(),range.length()-1)); byte[] body=Arrays.copyOfRange(data,start,data.length); exchange.getResponseHeaders().set("Content-Range","bytes "+start+"-"+(data.length-1)+"/"+data.length); send(exchange,206,body);} else send(exchange,200,data); }
     private static void send(HttpExchange exchange,int status,byte[] body)throws IOException { exchange.sendResponseHeaders(status,body.length); try(var out=exchange.getResponseBody()){out.write(body);} }
+
+    @Test void reusesVerifiedFinalFileWithoutNetwork() throws Exception {
+        byte[] data = "verified cache".getBytes();
+        String fileName = "cached.gcdh";
+        Path finalFile = temp.resolve(fileName);
+        Files.write(finalFile, data);
+
+        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/asset", exchange -> send(exchange, 500, "should-not-be-called".getBytes()));
+        server.start();
+
+        try (var executor = Executors.newSingleThreadExecutor()) {
+            Path result = new SecureDownloader(executor).downloadBlocking(
+                    request(fileName, data.length, sha(data)),
+                    ignored -> {}
+            );
+            assertEquals(finalFile, result);
+            assertArrayEquals(data, Files.readAllBytes(result));
+        }
+    }
+
     @Test void promotesAlreadyCompletePartWithoutNetwork() throws Exception {
         byte[] data = "already complete".getBytes();
         String fileName = "complete.gcdh";
