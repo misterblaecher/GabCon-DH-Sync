@@ -33,6 +33,7 @@ import java.util.Map;
 public final class ServerDistributionPublisher {
     public static final String TOKEN_ENV = "GABCON_DH_GITHUB_TOKEN";
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+    private static final long MAX_MANIFEST_BYTES = 16L * 1024L * 1024L;
 
     public record PublicationResult(
             boolean bootstrapCreated,
@@ -73,8 +74,38 @@ public final class ServerDistributionPublisher {
         Path manifestPath = publishRoot.resolve("manifest.json");
 
         boolean bootstrapCreated = !Files.isRegularFile(manifestPath);
-        DistributionManifest manifest;
+        DistributionManifest manifest = null;
         Counters counters = new Counters(0, 0);
+
+        if (bootstrapCreated && release.assetsByName().containsKey("manifest.json")) {
+            ServerState.MAINTENANCE_PROGRESS.updatePercent(
+                    "recover-manifest",
+                    "Recovering existing manifest.json from GitHub Release",
+                    8
+            );
+            String remoteJson = github.downloadTextAsset(
+                    release,
+                    "manifest.json",
+                    MAX_MANIFEST_BYTES
+            );
+            manifest = DistributionManifestCodec.parse(remoteJson, maxAssetBytes);
+            validateLocalPublicationIdentity(manifest, worldId, tag);
+
+            Path recoveredPart = manifestPath.resolveSibling("manifest.json.recover.part");
+            Files.writeString(
+                    recoveredPart,
+                    DistributionManifestCodec.toJson(manifest, maxAssetBytes)
+            );
+            Files.move(
+                    recoveredPart,
+                    manifestPath,
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING
+            );
+            bootstrapCreated = false;
+            GabConDhSync.LOGGER.info(
+                    "[GabConDHSync] Recovered local publication manifest from existing GitHub Release."
+            );
+        }
 
         if (bootstrapCreated) {
             ServerState.MAINTENANCE_PROGRESS.updatePercent(
@@ -88,7 +119,7 @@ public final class ServerDistributionPublisher {
             );
             manifest = built.manifest();
             counters = counters.add(built.counters());
-        } else {
+        } else if (manifest == null) {
             manifest = DistributionManifestCodec.parse(Files.readString(manifestPath), maxAssetBytes);
             validateLocalPublicationIdentity(manifest, worldId, tag);
         }
