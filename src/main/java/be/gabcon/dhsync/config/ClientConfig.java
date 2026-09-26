@@ -27,7 +27,7 @@ public final class ClientConfig {
                 .define("allowFallback", true);
         INTERCEPT_MANAGED_CONNECTIONS = b.comment("Intercept only server addresses registered in client-state.json.")
                 .define("interceptManagedConnections", true);
-        MAX_CONCURRENT_DOWNLOADS = b.defineInRange("maxConcurrentDownloads", 2, 1, 8);
+        MAX_CONCURRENT_DOWNLOADS = b.comment("Large GitHub Release assets are most reliable one at a time; raise only if the network path is stable.")\n                .defineInRange("maxConcurrentDownloads", 1, 1, 8);
         OPTIONAL_DOWNLOAD_SPEED_LIMIT = b.defineInRange("optionalDownloadSpeedLimit", 0L, 0L, Long.MAX_VALUE);
         MAX_DOWNLOAD_BYTES = b.defineInRange("maxDownloadBytes", 2L * 1024 * 1024 * 1024, 1L, Long.MAX_VALUE);
         WORLD_ID = b.define("worldId", "gabcon-main");
