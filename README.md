@@ -2,7 +2,7 @@
 
 Mod **NeoForge 1.21.1 / Java 21** pour distribuer les données **Distant Horizons** d'un serveur Minecraft via **GitHub Releases**, afin d'éviter que le serveur domestique n'envoie directement plusieurs gigaoctets de LOD à chaque client.
 
-> **État : 0.5.0-mvp, flux bout-en-bout prêt à tester.** Snapshots serveur sûrs, deltas logiques, publication GitHub Release, bootstrap segmenté, téléchargement client, synchronisation pré-connexion, transaction SQLite, rollback multi-dimensions et récupération après crash sont implémentés. La première publication et la première vraie reconnexion client restent à valider avant merge.
+> **État : 0.5.1-mvp, flux bout-en-bout prêt à tester.** Snapshots serveur sûrs, deltas logiques, publication GitHub Release, bootstrap segmenté, téléchargement client, synchronisation pré-connexion, transaction SQLite, rollback multi-dimensions et récupération après crash sont implémentés. La première publication et la première vraie reconnexion client restent à valider avant merge.
 
 ## Cible
 
@@ -231,6 +231,10 @@ Le premier test client 0.5 a validé l'enregistrement sur le vrai serveur GabCon
 - URL du manifest : Release `gabcon-data-gabcon-main/manifest.json`.
 
 La première reconnexion de ce profil doit donc sélectionner le bootstrap de la dimension enregistrée, puis appliquer les deltas publiés jusqu'à la baseline la plus récente.
+
+## Correctif UI 0.5.1
+
+Le premier écran réel de pré-connexion s'affichait correctement mais le flou de menu Minecraft rendait aussi le texte/progress moins lisible sur cette configuration. `ClientSyncScreen` n'utilise plus le blur du menu : il affiche maintenant un voile sombre simple, du texte net et une barre de progression dédiée.
 
 ## Test réel 0.5 restant avant merge
 
