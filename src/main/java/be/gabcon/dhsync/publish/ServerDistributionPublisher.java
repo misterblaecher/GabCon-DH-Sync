@@ -126,6 +126,10 @@ public final class ServerDistributionPublisher {
         );
         if (repairedAssets > 0) {
             counters = counters.add(new Counters(repairedAssets, 0));
+            GabConDhSync.LOGGER.info(
+                    "[GabConDHSync] Repaired {} legacy/missing referenced Release asset(s).",
+                    repairedAssets
+            );
             refreshed = github.refresh(tag);
         }
         verifyReferencedAssets(manifest, github, refreshed);
@@ -402,10 +406,6 @@ public final class ServerDistributionPublisher {
                                     part.sha256()
                             );
                             repaired++;
-                            GabConDhSync.LOGGER.info(
-                                    "[GabConDHSync] Repaired legacy/missing bootstrap asset: {}",
-                                    part.fileName()
-                            );
                         } finally {
                             Files.deleteIfExists(temp);
                         }
@@ -430,10 +430,6 @@ public final class ServerDistributionPublisher {
                         delta.sha256()
                 );
                 repaired++;
-                GabConDhSync.LOGGER.info(
-                        "[GabConDHSync] Repaired legacy/missing delta asset: {}",
-                        delta.fileName()
-                );
             }
         }
         return repaired;
