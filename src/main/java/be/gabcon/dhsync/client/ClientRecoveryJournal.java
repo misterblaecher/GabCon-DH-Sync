@@ -42,20 +42,32 @@ public final class ClientRecoveryJournal {
     ) {}
 
     public static Path recoveryDirectory() {
-        return FMLPaths.GAMEDIR.get()
+        return recoveryDirectory(FMLPaths.GAMEDIR.get());
+    }
+
+    static Path recoveryDirectory(Path gameDir) {
+        return gameDir
                 .resolve("gabcondhsync")
                 .resolve("recovery")
                 .toAbsolutePath().normalize();
     }
 
     public static Path pathFor(String serverAddress) {
-        return recoveryDirectory()
+        return pathFor(FMLPaths.GAMEDIR.get(), serverAddress);
+    }
+
+    static Path pathFor(Path gameDir, String serverAddress) {
+        return recoveryDirectory(gameDir)
                 .resolve(keyHash(ClientSyncStateStore.normalizeServerAddress(serverAddress)) + ".json")
                 .toAbsolutePath().normalize();
     }
 
     public static int recoverAll() throws Exception {
-        Path root = recoveryDirectory();
+        return recoverAll(FMLPaths.GAMEDIR.get());
+    }
+
+    static int recoverAll(Path gameDir) throws Exception {
+        Path root = recoveryDirectory(gameDir);
         if (!Files.isDirectory(root)) return 0;
         int recovered = 0;
         try (var stream = Files.list(root)) {
@@ -63,26 +75,37 @@ public final class ClientRecoveryJournal {
                     .filter(p -> p.getFileName().toString().endsWith(".json"))
                     .filter(p -> !p.getFileName().toString().endsWith(".incremental.json"))
                     .toList()) {
-                Journal journal;
-                try {
-                    journal = GSON.fromJson(Files.readString(file), Journal.class);
-                } catch (RuntimeException e) {
-                    throw new IOException("Unreadable GabCon recovery journal: " + file, e);
-                }
-                if (journal == null || journal.serverAddress() == null) {
-                    throw new IOException("Invalid GabCon recovery journal: " + file);
-                }
-                if (recoverIfPresent(journal.serverAddress())) recovered++;
+                Journal journal = read(file);
+                if (recoverIfPresent(gameDir, journal.serverAddress())) recovered++;
             }
         }
         return recovered;
     }
 
-    public static void write(String serverAddress, Phase phase, ClientSyncState.ServerProfile previousProfile, List<Entry> entries)
-            throws IOException {
-        Journal journal = new Journal(SCHEMA_VERSION, ClientSyncStateStore.normalizeServerAddress(serverAddress),
-                phase, previousProfile, List.copyOf(entries));
-        Path file = pathFor(serverAddress);
+    public static void write(
+            String serverAddress,
+            Phase phase,
+            ClientSyncState.ServerProfile previousProfile,
+            List<Entry> entries
+    ) throws IOException {
+        write(FMLPaths.GAMEDIR.get(), serverAddress, phase, previousProfile, entries);
+    }
+
+    static void write(
+            Path gameDir,
+            String serverAddress,
+            Phase phase,
+            ClientSyncState.ServerProfile previousProfile,
+            List<Entry> entries
+    ) throws IOException {
+        Journal journal = new Journal(
+                SCHEMA_VERSION,
+                ClientSyncStateStore.normalizeServerAddress(serverAddress),
+                phase,
+                previousProfile,
+                List.copyOf(entries)
+        );
+        Path file = pathFor(gameDir, serverAddress);
         Files.createDirectories(file.getParent());
         Path part = file.resolveSibling(file.getFileName() + ".part");
         Files.writeString(part, GSON.toJson(journal));
@@ -90,23 +113,22 @@ public final class ClientRecoveryJournal {
     }
 
     public static void delete(String serverAddress) throws IOException {
-        Files.deleteIfExists(pathFor(serverAddress));
+        delete(FMLPaths.GAMEDIR.get(), serverAddress);
+    }
+
+    static void delete(Path gameDir, String serverAddress) throws IOException {
+        Files.deleteIfExists(pathFor(gameDir, serverAddress));
     }
 
     public static boolean recoverIfPresent(String serverAddress) throws Exception {
-        Path file = pathFor(serverAddress);
+        return recoverIfPresent(FMLPaths.GAMEDIR.get(), serverAddress);
+    }
+
+    static boolean recoverIfPresent(Path gameDir, String serverAddress) throws Exception {
+        Path file = pathFor(gameDir, serverAddress);
         if (!Files.isRegularFile(file)) return false;
 
-        Journal journal;
-        try {
-            journal = GSON.fromJson(Files.readString(file), Journal.class);
-        } catch (RuntimeException e) {
-            throw new IOException("Unreadable GabCon recovery journal: " + file, e);
-        }
-        if (journal == null || journal.schemaVersion() != SCHEMA_VERSION || journal.entries() == null) {
-            throw new IOException("Invalid GabCon recovery journal: " + file);
-        }
-
+        Journal journal = read(file);
         if (journal.phase() == Phase.STATE_COMMITTED) {
             for (Entry entry : journal.entries()) Files.deleteIfExists(Path.of(entry.workPath()));
             Files.deleteIfExists(file);
@@ -130,7 +152,7 @@ public final class ClientRecoveryJournal {
         }
 
         if (journal.previousProfile() != null) {
-            ClientSyncStateStore.upsert(ClientSyncStateStore.defaultPath(), journal.previousProfile());
+            ClientSyncStateStore.upsert(ClientSyncStateStore.defaultPath(gameDir), journal.previousProfile());
         }
         Files.deleteIfExists(file);
         return true;
@@ -142,6 +164,23 @@ public final class ClientRecoveryJournal {
         } catch (AtomicMoveNotSupportedException e) {
             Files.move(source, target, StandardCopyOption.REPLACE_EXISTING);
         }
+    }
+
+    private static Journal read(Path file) throws IOException {
+        Journal journal;
+        try {
+            journal = GSON.fromJson(Files.readString(file), Journal.class);
+        } catch (RuntimeException e) {
+            throw new IOException("Unreadable GabCon recovery journal: " + file, e);
+        }
+        if (journal == null
+                || journal.schemaVersion() != SCHEMA_VERSION
+                || journal.serverAddress() == null
+                || journal.phase() == null
+                || journal.entries() == null) {
+            throw new IOException("Invalid GabCon recovery journal: " + file);
+        }
+        return journal;
     }
 
     private static String keyHash(String value) {
