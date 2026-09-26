@@ -14,6 +14,8 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.util.HexFormat;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Locale;
@@ -179,6 +181,52 @@ public final class GitHubReleaseClient {
         requireIntegrity(assetName, info, expectedSize, expectedDigest(expectedSha256));
     }
 
+    public String downloadTextAsset(
+            Release release,
+            String assetName,
+            long maxBytes
+    ) throws IOException, InterruptedException {
+        if (maxBytes <= 0L) throw new IllegalArgumentException("maxBytes must be positive");
+        AssetInfo info = release.assetsByName().get(assetName);
+        if (info == null) throw new IOException("GitHub Release asset is missing: " + assetName);
+        if (info.size() < 0L || info.size() > maxBytes) {
+            throw new IOException("GitHub Release text asset exceeds limit: " + assetName);
+        }
+
+        HttpRequest request = HttpRequest.newBuilder(
+                        URI.create(apiBase + "/repos/" + repository + "/releases/assets/" + info.id()))
+                .GET()
+                .timeout(Duration.ofSeconds(60))
+                .header("Authorization", "Bearer " + token)
+                .header("Accept", "application/octet-stream")
+                .header("X-GitHub-Api-Version", "2022-11-28")
+                .header("User-Agent", "GabConDHSync")
+                .build();
+        HttpResponse<byte[]> response = client.send(request, HttpResponse.BodyHandlers.ofByteArray());
+        if (response.statusCode() != 200) {
+            throw new IOException("GitHub download asset " + assetName
+                    + " failed: HTTP " + response.statusCode());
+        }
+
+        byte[] bytes = response.body();
+        if (bytes == null || bytes.length != info.size()) {
+            throw new IOException("GitHub Release asset size mismatch while downloading " + assetName);
+        }
+        if (bytes.length > maxBytes) {
+            throw new IOException("GitHub Release text asset exceeds limit after download: " + assetName);
+        }
+
+        String digest = nullToEmpty(info.digest());
+        if (!digest.isBlank()) {
+            String actual = "sha256:" + sha256(bytes);
+            if (!actual.equalsIgnoreCase(digest)) {
+                throw new IOException("GitHub Release asset SHA-256 mismatch while downloading "
+                        + assetName + ": expected=" + digest + ", actual=" + actual);
+            }
+        }
+        return new String(bytes, StandardCharsets.UTF_8);
+    }
+
     public void deleteAsset(long assetId) throws IOException, InterruptedException {
         HttpResponse<String> response = send(HttpRequest.newBuilder(
                 URI.create(apiBase + "/repos/" + repository + "/releases/assets/" + assetId))
@@ -281,6 +329,14 @@ public final class GitHubReleaseClient {
             throw new IOException("GitHub Release asset SHA-256 mismatch for " + assetName
                     + ": expected=" + expectedDigest + ", actual="
                     + (actualDigest.isBlank() ? "<missing>" : actualDigest));
+        }
+    }
+
+    private static String sha256(byte[] bytes) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+        } catch (Exception e) {
+            throw new IllegalStateException("SHA-256 unavailable", e);
         }
     }
 
