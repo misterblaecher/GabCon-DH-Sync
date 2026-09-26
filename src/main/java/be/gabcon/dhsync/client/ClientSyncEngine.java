@@ -183,7 +183,7 @@ public final class ClientSyncEngine {
 
                     sink.update(
                             "prepare",
-                            dimension.dimension() + " — validating DB + building compact rollback",
+                            dimension.dimension() + " — building compact rollback",
                             0,
                             0
                     );
