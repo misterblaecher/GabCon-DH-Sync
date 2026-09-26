@@ -33,6 +33,74 @@ class GitHubReleaseClientDigestTest {
         if (server != null) server.stop(0);
     }
 
+
+    @Test
+    void downloadsExistingManifestAssetWithoutTouchingReferencedAssets() throws Exception {
+        String body = "{\"schemaVersion\":2,\"worldId\":\"gabcon-main\"}";
+        byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+        String sha = java.util.HexFormat.of().formatHex(
+                java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
+        );
+
+        AtomicInteger gets = new AtomicInteger();
+        AtomicInteger deletes = new AtomicInteger();
+        GitHubReleaseClient client = client(exchange -> {
+            if ("DELETE".equals(exchange.getRequestMethod())) {
+                deletes.incrementAndGet();
+                respond(exchange, 204, "");
+                return;
+            }
+            if ("GET".equals(exchange.getRequestMethod())
+                    && exchange.getRequestURI().getPath().endsWith("/releases/assets/99")) {
+                gets.incrementAndGet();
+                respond(exchange, 200, body);
+                return;
+            }
+            respond(exchange, 404, "{}");
+        });
+
+        var release = new GitHubReleaseClient.Release(
+                1L,
+                "tag",
+                Map.of(
+                        "manifest.json",
+                        new GitHubReleaseClient.AssetInfo(
+                                99L, bytes.length, "sha256:" + sha
+                        )
+                )
+        );
+
+        assertEquals(body, client.downloadTextAsset(release, "manifest.json", 1024L));
+        assertEquals(1, gets.get());
+        assertEquals(0, deletes.get(),
+                "recovering the live manifest must never delete a referenced asset");
+    }
+
+    @Test
+    void remoteManifestDownloadRejectsDigestMismatch() throws Exception {
+        String body = "{\"schemaVersion\":2}";
+        byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+
+        GitHubReleaseClient client = client(exchange ->
+                respond(exchange, 200, body));
+
+        var release = new GitHubReleaseClient.Release(
+                1L,
+                "tag",
+                Map.of(
+                        "manifest.json",
+                        new GitHubReleaseClient.AssetInfo(
+                                99L, bytes.length, "sha256:" + "0".repeat(64)
+                        )
+                )
+        );
+
+        IOException ex = assertThrows(IOException.class, () ->
+                client.downloadTextAsset(release, "manifest.json", 1024L)
+        );
+        assertTrue(ex.getMessage().contains("SHA-256 mismatch"));
+    }
+
     @Test
     void reusesOnlyWhenSizeAndDigestMatch() throws Exception {
         Path asset = temp.resolve("asset.bin");
