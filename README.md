@@ -2,7 +2,7 @@
 
 Mod **NeoForge 1.21.1 / Java 21** pour distribuer les données **Distant Horizons** d'un serveur Minecraft via **GitHub Releases**, afin d'éviter que le serveur domestique n'envoie directement plusieurs gigaoctets de LOD à chaque client.
 
-> **État : 0.6.1-mvp, flux bout-en-bout et rollback incrémental compact validés sur la DB réelle ; optimisation des gros index DH prête à retester.** Snapshots serveur sûrs, deltas logiques, publication GitHub Release, bootstrap segmenté et synchronisation pré-connexion réelle sont validés. Le chemin incrémental peut désormais appliquer un petit delta directement sur une DB DH fermée avec un reverse-delta compact et un journal crash-safe, sans recopier ~10 Go à chaque mise à jour.
+> **État : 0.6.2-mvp, rollback compact validé sur la DB réelle ; le chemin incrémental ne rescane plus toute la DB DH à chaque petit delta.** Snapshots serveur sûrs, deltas logiques, publication GitHub Release, bootstrap segmenté et synchronisation pré-connexion réelle sont validés. Le chemin incrémental peut désormais appliquer un petit delta directement sur une DB DH fermée avec un reverse-delta compact et un journal crash-safe, sans recopier ~10 Go à chaque mise à jour.
 
 ## Cible
 
@@ -239,6 +239,28 @@ La première reconnexion de ce profil doit donc sélectionner le bootstrap de la
 ## Correctif UI 0.5.1
 
 Le premier écran réel de pré-connexion s'affichait correctement mais le flou de menu Minecraft rendait aussi le texte/progress moins lisible sur cette configuration. `ClientSyncScreen` n'utilise plus le blur du menu : il affiche maintenant un voile sombre simple, du texte net et une barre de progression dédiée.
+
+## Optimisation intégrité incrémentale 0.6.2
+
+Le test réel 0.6.1 a mesuré précisément le goulot restant sur une DB Overworld d'environ 9.7 Gio :
+
+- rollback compact : 158624 ms pour seulement 679 lignes à restaurer et 124 clés à supprimer ;
+- reverse-delta produit : 14925824 octets ;
+- application du delta : 14760 ms ;
+- la synchro pré-connexion s'est terminée avec `changed=true` et la connexion Minecraft a repris normalement.
+
+Le scan lent venait du `PRAGMA quick_check` complet de la grosse DB au début du chemin incrémental. Pour un client déjà géré par GabCon, 0.6.2 remplace ces scans complets par des garanties ciblées :
+
+- DB locale obligatoirement inactive avant mutation ;
+- delta téléchargé toujours vérifié (taille, SHA-256 et quick_check) ;
+- chaîne de baseline validée ;
+- reverse-delta compact capturé et quick-checké avant toute mutation ;
+- application SQLite atomique en transaction ;
+- chaque upsert est relu et comparé exactement au delta avant commit ;
+- chaque delete est vérifié absent avant commit ;
+- journal de récupération conservé jusqu'au commit d'état.
+
+Les chemins bootstrap/offline de secours gardent les vérifications complètes existantes.
 
 ## Optimisation rollback compact 0.6.1
 
