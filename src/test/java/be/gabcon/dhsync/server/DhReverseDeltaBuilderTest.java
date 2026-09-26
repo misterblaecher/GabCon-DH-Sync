@@ -35,7 +35,7 @@ class DhReverseDeltaBuilderTest {
         );
         assertTrue(Files.isRegularFile(built.rollbackDelta()));
 
-        var forward = DhDeltaApplier.applyToWorkingCopy(
+        var forward = DhDeltaApplier.applyToPrecheckedWorkingCopy(
                 client,
                 fixture.deltaDb(),
                 Hashes.sha256(fixture.oldDb())
