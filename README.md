@@ -2,7 +2,7 @@
 
 Mod **NeoForge 1.21.1 / Java 21** pour distribuer les données **Distant Horizons** d'un serveur Minecraft via **GitHub Releases**, afin d'éviter que le serveur domestique n'envoie directement plusieurs gigaoctets de LOD à chaque client.
 
-> **État : 0.6.2-mvp, code et CI validés ; validation réelle finale encore requise avant merge.** Snapshots serveur sûrs, deltas logiques, publication GitHub Release, bootstrap segmenté, synchronisation pré-connexion et rollback compact 0.6.0/0.6.1 sont validés sur les vraies données GabCon. Le nouveau delta 0.6.2 a été téléchargé par le client réel sans retélécharger le bootstrap ; il reste à confirmer l'application complète, les timings du fast-path et la reprise de connexion Minecraft avant de retirer le statut MVP.
+> **État : 0.6.2, validation réelle finale PASS.** Snapshots serveur sûrs, deltas logiques, publication GitHub Release, bootstrap segmenté, synchronisation pré-connexion et rollback compact sont validés sur les vraies données GabCon. Le client 0.6.2 a pris le chemin delta-only sans retélécharger le bootstrap ; un démarrage de contrôle immédiatement après voit la baseline déjà à jour (`changed=false`) et reprend normalement la connexion Minecraft.
 
 ## Cible
 
@@ -322,20 +322,19 @@ Le bootstrap pré-connexion réel a réussi sur le client Windows/Java 21 avec 0
 
 Cela valide le flux réel `manifest -> bootstrap -> delta chain -> apply -> commit -> connect` sur une DB DH cliente connue.
 
-## Test réel 0.6.2 restant avant merge
+## Validation réelle finale 0.6.2
 
-Les validations réelles 0.6.0 et 0.6.1 sont terminées. Le dernier candidat 0.6.2 est publié côté données avec le delta :
+La gate de fusion 0.6.2 est validée sur le client réel.
+
+Le delta final publié est :
 
 ```text
 delta_minecraft_overworld_11ac8ffc9271_063c2940e2ef.sqlite
 ```
 
-La télémétrie GitHub Release confirme déjà que ce delta a été téléchargé une fois par le client réel et que les 10 parties du bootstrap Overworld n'ont pas été retéléchargées. Cela valide le choix `delta-only` du planner.
+La Release GitHub a montré un téléchargement de ce nouveau delta sans nouveau téléchargement des 10 parties du bootstrap Overworld, ce qui confirme le chemin `delta-only`. Le démarrage client suivant avec `gabcondhsync-0.6.2-mvp.jar` a terminé le pré-connect avec `changed=false`, puis Minecraft a ouvert la connexion au serveur normalement. La commande `/gabcondhsyncclient status` répond ensuite en jeu avec le profil géré, une dimension et une baseline connue.
 
-Il reste une seule condition avant merge : confirmer côté client que l'application 0.6.2 se termine correctement, relever les timings `Compact rollback ready` et `Incremental delta applied`, vérifier `changed=true`, puis confirmer que Minecraft reprend la connexion normalement avec la nouvelle baseline `063c2940e2ef...`.
-
-Un compteur de téléchargement GitHub ne prouve pas à lui seul le succès de la transaction SQLite ou de la connexion Minecraft ; ces deux points restent donc volontairement bloquants avant la fusion.
-
+Le log exact de la première application 0.6.2 n'a pas été conservé, donc les timings du premier passage ne sont pas documentés. La validation fonctionnelle est néanmoins établie par l'état déjà à jour au démarrage suivant, l'absence de rebootstrap et la connexion réussie.
 ## Build et CI
 
 ```powershell
@@ -360,4 +359,4 @@ GitHub Actions construit sous Java 21 et exécute les tests SQLite/manifest/down
 - journal crash-safe avant toute mutation incrémentale ;
 - reverse-delta compact et rollback multi-dimensions ;
 - mode de secours `compactIncrementalApply=false` ;
-- aucune fusion de la PR tant que le test réel 0.6.2 n'est pas validé.
+- fusion autorisée après validation réelle 0.6.2 et CI verte.
