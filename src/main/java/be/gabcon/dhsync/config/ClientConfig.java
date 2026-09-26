@@ -9,6 +9,7 @@ public final class ClientConfig {
     public static final ModConfigSpec.BooleanValue CONNECT_ON_COMPLETE;
     public static final ModConfigSpec.BooleanValue ALLOW_FALLBACK;
     public static final ModConfigSpec.BooleanValue INTERCEPT_MANAGED_CONNECTIONS;
+    public static final ModConfigSpec.BooleanValue COMPACT_INCREMENTAL_APPLY;
     public static final ModConfigSpec.IntValue MAX_CONCURRENT_DOWNLOADS;
     public static final ModConfigSpec.LongValue OPTIONAL_DOWNLOAD_SPEED_LIMIT;
     public static final ModConfigSpec.LongValue MAX_DOWNLOAD_BYTES;
@@ -27,6 +28,11 @@ public final class ClientConfig {
                 .define("allowFallback", true);
         INTERCEPT_MANAGED_CONNECTIONS = b.comment("Intercept only server addresses registered in client-state.json.")
                 .define("interceptManagedConnections", true);
+        COMPACT_INCREMENTAL_APPLY = b.comment(
+                        "Apply delta-only updates directly with a compact reverse-delta rollback. "
+                                + "Set false to use the slower full working-copy path."
+                )
+                .define("compactIncrementalApply", true);
         MAX_CONCURRENT_DOWNLOADS = b.comment("Large GitHub Release assets are most reliable one at a time; raise only if the network path is stable.")
                 .defineInRange("maxConcurrentDownloads", 1, 1, 8);
         OPTIONAL_DOWNLOAD_SPEED_LIMIT = b.defineInRange("optionalDownloadSpeedLimit", 0L, 0L, Long.MAX_VALUE);
