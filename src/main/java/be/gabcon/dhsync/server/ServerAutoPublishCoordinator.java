@@ -44,6 +44,11 @@ public final class ServerAutoPublishCoordinator {
     private final Clock clock;
     private final Pipeline pipeline;
 
+    // Production auto-publish execution is serialized by ServerState's single
+    // AUTO_PUBLISH maintenance lease and the single-thread scheduler. Status reads
+    // must never share a monitor with the long snapshot/upload pipeline; state-file
+    // writes are atomic, so readers can safely observe the last committed phase.
+
     public ServerAutoPublishCoordinator(
             ChangedRegionTracker tracker,
             Path stateFile,
@@ -58,7 +63,7 @@ public final class ServerAutoPublishCoordinator {
         this.pipeline = pipeline;
     }
 
-    public synchronized boolean isDue(int changedRegionThreshold, Duration interval) throws IOException {
+    public boolean isDue(int changedRegionThreshold, Duration interval) throws IOException {
         validatePolicy(changedRegionThreshold, interval);
         ServerAutoPublishStateStore.State state = ServerAutoPublishStateStore.load(stateFile, worldId);
         tracker.ensureSequenceAtLeast(state.capturedWatermark() + 1L);
@@ -77,7 +82,7 @@ public final class ServerAutoPublishCoordinator {
         return changed != null && !changed.plus(interval).isAfter(now);
     }
 
-    public synchronized RunResult runIfDue(int changedRegionThreshold, Duration interval) throws Exception {
+    public RunResult runIfDue(int changedRegionThreshold, Duration interval) throws Exception {
         validatePolicy(changedRegionThreshold, interval);
         if (!isDue(changedRegionThreshold, interval)) {
             return new RunResult(false, false, "not due");
@@ -209,7 +214,7 @@ public final class ServerAutoPublishCoordinator {
         }
     }
 
-    public synchronized Status status(Duration interval) {
+    public Status status(Duration interval) {
         try {
             ServerAutoPublishStateStore.State state = ServerAutoPublishStateStore.load(stateFile, worldId);
             tracker.ensureSequenceAtLeast(state.capturedWatermark() + 1L);
