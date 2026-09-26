@@ -24,6 +24,7 @@ final class ServerDirtyMarker {
 
     static void mark(Path path, Instant firstSeen) throws IOException {
         Path target = path.toAbsolutePath().normalize();
+        if (Files.isRegularFile(target)) return;
         Files.createDirectories(target.getParent());
         Path part = target.resolveSibling(target.getFileName() + ".part");
         Instant timestamp = firstSeen == null ? Instant.now() : firstSeen;
