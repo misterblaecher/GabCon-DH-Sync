@@ -2,47 +2,59 @@ package be.gabcon.dhsync.server;
 
 import java.time.Instant;
 import java.util.Collections;
+import java.util.NavigableMap;
 import java.util.NavigableSet;
+import java.util.TreeMap;
 import java.util.TreeSet;
-import java.util.concurrent.ConcurrentSkipListMap;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
 
 public final class ChangedRegionTracker {
-    public record Capture(long watermark, int pendingCount, Instant lastChange) {}
+    public record Capture(long watermark, int pendingCount, Instant oldestPendingChange) {}
 
-    private final ConcurrentSkipListMap<RegionKey, Long> pending = new ConcurrentSkipListMap<>();
-    private final AtomicLong sequence;
-    private final AtomicReference<Instant> lastChange = new AtomicReference<>();
+    private record PendingRegion(long sequence, Instant firstSeen) {}
+
+    private final NavigableMap<RegionKey, PendingRegion> pending = new TreeMap<>();
+    private long sequence;
 
     public ChangedRegionTracker() {
         this(initialSequence());
     }
 
     ChangedRegionTracker(long initialSequence) {
-        this.sequence = new AtomicLong(Math.max(0L, initialSequence));
+        this.sequence = Math.max(0L, initialSequence);
     }
 
-    public void markChunkSaved(String dimension, int chunkX, int chunkZ) {
-        long next = sequence.incrementAndGet();
-        pending.put(RegionKey.fromChunk(dimension, chunkX, chunkZ), next);
-        lastChange.set(Instant.now());
+    /**
+     * Sequence allocation and pending insertion are synchronized with capture and
+     * acknowledgement so a save can never receive a captured watermark before it
+     * becomes visible in the pending map.
+     */
+    public synchronized boolean markChunkSaved(String dimension, int chunkX, int chunkZ) {
+        boolean wasClean = pending.isEmpty();
+        RegionKey key = RegionKey.fromChunk(dimension, chunkX, chunkZ);
+        PendingRegion previous = pending.get(key);
+        Instant firstSeen = previous == null ? Instant.now() : previous.firstSeen();
+        long next = ++sequence;
+        pending.put(key, new PendingRegion(next, firstSeen));
+        return wasClean;
     }
 
-    public int pendingCount() {
+    public synchronized int pendingCount() {
         return pending.size();
     }
 
-    public NavigableSet<RegionKey> snapshot() {
+    public synchronized NavigableSet<RegionKey> snapshot() {
         return Collections.unmodifiableNavigableSet(new TreeSet<>(pending.keySet()));
     }
 
-    public Instant lastChange() {
-        return lastChange.get();
+    public synchronized Instant oldestPendingChange() {
+        return pending.values().stream()
+                .map(PendingRegion::firstSeen)
+                .min(Instant::compareTo)
+                .orElse(null);
     }
 
-    public Capture capture() {
-        return new Capture(sequence.get(), pending.size(), lastChange.get());
+    public synchronized Capture capture() {
+        return new Capture(sequence, pending.size(), oldestPendingChange());
     }
 
     /**
@@ -50,9 +62,8 @@ public final class ChangedRegionTracker {
      * If the same region is saved again while publication is running, its newer
      * sequence remains pending.
      */
-    public void acknowledgeThrough(long watermark) {
-        pending.entrySet().removeIf(entry -> entry.getValue() <= watermark);
-        if (pending.isEmpty()) lastChange.set(null);
+    public synchronized void acknowledgeThrough(long watermark) {
+        pending.entrySet().removeIf(entry -> entry.getValue().sequence() <= watermark);
     }
 
     /**
@@ -60,13 +71,12 @@ public final class ChangedRegionTracker {
      * observed chunk saves always receive sequence numbers newer than the persisted
      * capture watermark.
      */
-    public void ensureSequenceAtLeast(long floor) {
-        sequence.accumulateAndGet(Math.max(0L, floor), Math::max);
+    public synchronized void ensureSequenceAtLeast(long floor) {
+        sequence = Math.max(sequence, Math.max(0L, floor));
     }
 
-    public void clear() {
+    public synchronized void clear() {
         pending.clear();
-        lastChange.set(null);
     }
 
     private static long initialSequence() {
