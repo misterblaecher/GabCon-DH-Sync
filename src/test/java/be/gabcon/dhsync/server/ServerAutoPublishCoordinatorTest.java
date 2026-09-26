@@ -142,6 +142,40 @@ class ServerAutoPublishCoordinatorTest {
     }
 
     @Test
+    void failedCycleRestartsFromCurrentPublishedBaseAfterManualAdvance() throws Exception {
+        MutableClock clock = new MutableClock(Instant.parse("2026-09-26T12:00:00Z"));
+        ChangedRegionTracker tracker = new ChangedRegionTracker(75L, clock);
+        tracker.markChunkSaved("minecraft:overworld", 0, 0);
+
+        FakePipeline pipeline = new FakePipeline();
+        pipeline.base = "/snapshots/base-a";
+        pipeline.snapshot = "/snapshots/auto-a";
+        pipeline.delta = "/deltas/a-auto";
+        pipeline.failPublish = true;
+
+        ServerAutoPublishCoordinator coordinator = coordinator(tracker, clock, pipeline);
+        assertThrows(Exception.class, () -> coordinator.runIfDue(1, Duration.ofMinutes(5)));
+        assertEquals("/snapshots/base-a", pipeline.lastDeltaBase);
+        assertEquals(1, pipeline.snapshotCalls);
+        assertEquals(1, pipeline.deltaCalls);
+
+        // During the retry cooldown an operator advances the published chain manually.
+        pipeline.base = "/snapshots/manual-b";
+        pipeline.snapshot = "/snapshots/auto-c";
+        pipeline.delta = "/deltas/b-c";
+        pipeline.failPublish = false;
+        clock.advance(Duration.ofMinutes(6));
+
+        assertTrue(coordinator.runIfDue(1, Duration.ofMinutes(5)).success());
+        assertEquals(2, pipeline.snapshotCalls,
+                "stale prepared snapshot must be replaced after published-base drift");
+        assertEquals(2, pipeline.deltaCalls,
+                "delta must be rebuilt from the manually advanced baseline");
+        assertEquals("/snapshots/manual-b", pipeline.lastDeltaBase);
+        assertEquals(0, tracker.pendingCount());
+    }
+
+    @Test
     void persistedFailedPublicationProtectsNewChangesAfterRestart() throws Exception {
         ChangedRegionTracker firstTracker = new ChangedRegionTracker(100L);
         firstTracker.markChunkSaved("minecraft:overworld", 0, 0);
