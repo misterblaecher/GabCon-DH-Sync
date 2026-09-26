@@ -59,7 +59,10 @@ public final class ClientRecoveryJournal {
         if (!Files.isDirectory(root)) return 0;
         int recovered = 0;
         try (var stream = Files.list(root)) {
-            for (Path file : stream.filter(p -> p.getFileName().toString().endsWith(".json")).toList()) {
+            for (Path file : stream
+                    .filter(p -> p.getFileName().toString().endsWith(".json"))
+                    .filter(p -> !p.getFileName().toString().endsWith(".incremental.json"))
+                    .toList()) {
                 Journal journal;
                 try {
                     journal = GSON.fromJson(Files.readString(file), Journal.class);
