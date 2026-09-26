@@ -43,7 +43,13 @@ public final class ClientSyncScreen extends Screen {
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        renderBackground(graphics, mouseX, mouseY, partialTick);
+        // Do not call Screen#renderBackground here. On some client/render configurations
+        // Minecraft's menu blur can also soften this transient screen's foreground.
+        // A simple translucent veil keeps the previous screen recognizable while all
+        // GabCon status text and progress indicators remain pixel-sharp.
+        graphics.fill(0, 0, width, height, 0xCC000000);
+        super.render(graphics, mouseX, mouseY, partialTick);
+
         graphics.drawCenteredString(font, title, width / 2, height / 2 - 55, 0xFFFFFF);
 
         if (failure != null) {
@@ -51,14 +57,27 @@ public final class ClientSyncScreen extends Screen {
             graphics.drawCenteredString(font, Component.literal(trim(failure, 90)), width / 2, height / 2, 0xFFFFFF);
         } else {
             graphics.drawCenteredString(font, Component.literal(stage), width / 2, height / 2 - 20, 0xFFFFFF);
-            graphics.drawCenteredString(font, Component.literal(trim(detail, 90)), width / 2, height / 2, 0xAAAAAA);
+            graphics.drawCenteredString(font, Component.literal(trim(detail, 90)), width / 2, height / 2, 0xCFCFCF);
+
+            int barWidth = Math.min(320, Math.max(160, width - 80));
+            int barHeight = 8;
+            int barX = width / 2 - barWidth / 2;
+            int barY = height / 2 + 18;
+            graphics.fill(barX, barY, barX + barWidth, barY + barHeight, 0xFF303030);
+
             if (total > 0) {
                 double pct = Math.min(100.0, Math.max(0.0, current * 100.0 / total));
+                int filled = (int) Math.round(barWidth * pct / 100.0);
+                if (filled > 0) {
+                    graphics.fill(barX, barY, barX + filled, barY + barHeight, 0xFF55FF55);
+                }
                 graphics.drawCenteredString(font, Component.literal(String.format(java.util.Locale.ROOT, "%.1f%%", pct)),
-                        width / 2, height / 2 + 20, 0xAAAAAA);
+                        width / 2, barY + 13, 0xFFFFFF);
+            } else {
+                graphics.drawCenteredString(font, Component.literal("Working..."),
+                        width / 2, barY + 13, 0xAAAAAA);
             }
         }
-        super.render(graphics, mouseX, mouseY, partialTick);
     }
 
     @Override
