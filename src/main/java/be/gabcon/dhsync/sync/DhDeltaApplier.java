@@ -92,8 +92,10 @@ public final class DhDeltaApplier {
     }
 
     /**
-     * Applies a delta after the caller has already quick-checked both databases.
-     * The target is still quick-checked after the transaction before success is returned.
+     * Fast path for a managed, offline client DB after a compact reverse delta has
+     * already been captured. The forward delta is applied atomically and every row
+     * named by the delta is verified before commit. This intentionally avoids a
+     * whole-database quick_check on each small incremental update.
      */
     public static WorkingApplyResult applyToPrecheckedWorkingCopy(
             Path workDatabase,
@@ -115,7 +117,6 @@ public final class DhDeltaApplier {
         }
 
         List<TableApplyStats> stats = applyIntoWorkingCopy(work, delta);
-        DhSqliteSnapshotter.verify(work);
         return new WorkingApplyResult(meta.newSha256(), List.copyOf(stats));
     }
 
@@ -272,7 +273,53 @@ public final class DhDeltaApplier {
                         + " WHERE true ON CONFLICT (" + conflictColumns + ") " + updateClause
         );
 
+        verifyAppliedTable(statement, table, targetColumns, primaryKey);
         return new TableApplyStats(table, deletes, upserts);
+    }
+
+    private static void verifyAppliedTable(
+            Statement statement,
+            String table,
+            List<Column> targetColumns,
+            List<Column> primaryKey
+    ) throws SQLException {
+        String qt = qident(table);
+        String qDelete = qident(table + "Delete");
+        String qUpsert = qident(table + "Upsert");
+
+        String upsertKeyMatch = primaryKey.stream()
+                .map(c -> "t." + qident(c.name()) + " = u." + qident(c.name()))
+                .reduce((a, b) -> a + " AND " + b)
+                .orElseThrow();
+        String deleteKeyMatch = primaryKey.stream()
+                .map(c -> "t." + qident(c.name()) + " = d." + qident(c.name()))
+                .reduce((a, b) -> a + " AND " + b)
+                .orElseThrow();
+        String rowEquals = targetColumns.stream()
+                .map(c -> "t." + qident(c.name()) + " IS u." + qident(c.name()))
+                .reduce((a, b) -> a + " AND " + b)
+                .orElseThrow();
+
+        long badUpserts = scalarLong(
+                statement,
+                "SELECT COUNT(*) FROM delta." + qUpsert + " u"
+                        + " WHERE NOT EXISTS (SELECT 1 FROM main." + qt + " t"
+                        + " WHERE " + upsertKeyMatch + " AND " + rowEquals + ")"
+        );
+        long badDeletes = scalarLong(
+                statement,
+                "SELECT COUNT(*) FROM delta." + qDelete + " d"
+                        + " WHERE EXISTS (SELECT 1 FROM main." + qt + " t"
+                        + " WHERE " + deleteKeyMatch + ")"
+        );
+
+        if (badUpserts != 0 || badDeletes != 0) {
+            throw new SQLException(
+                    "Delta postcondition failed for " + table
+                            + ": mismatchedUpserts=" + badUpserts
+                            + ", remainingDeletes=" + badDeletes
+            );
+        }
     }
 
     private static void validateTargetAndDelta(Connection conn, Statement statement) throws SQLException {
