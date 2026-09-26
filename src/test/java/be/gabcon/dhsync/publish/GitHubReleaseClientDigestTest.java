@@ -77,6 +77,29 @@ class GitHubReleaseClientDigestTest {
     }
 
     @Test
+    void remoteManifestDownloadRejectsMissingDigest() throws Exception {
+        String body = "{\"schemaVersion\":2}";
+        byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+
+        GitHubReleaseClient client = client(exchange ->
+                respond(exchange, 200, body));
+
+        var release = new GitHubReleaseClient.Release(
+                1L,
+                "tag",
+                Map.of(
+                        "manifest.json",
+                        new GitHubReleaseClient.AssetInfo(99L, bytes.length, null)
+                )
+        );
+
+        IOException ex = assertThrows(IOException.class, () ->
+                client.downloadTextAsset(release, "manifest.json", 1024L)
+        );
+        assertTrue(ex.getMessage().contains("no verifiable SHA-256 digest"));
+    }
+
+    @Test
     void remoteManifestDownloadRejectsDigestMismatch() throws Exception {
         String body = "{\"schemaVersion\":2}";
         byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
