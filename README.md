@@ -2,7 +2,7 @@
 
 Mod **NeoForge 1.21.1 / Java 21** pour distribuer les données **Distant Horizons** d'un serveur Minecraft via **GitHub Releases**, afin d'éviter que le serveur domestique n'envoie directement plusieurs gigaoctets de LOD à chaque client.
 
-> **État : 0.5.4-mvp, flux bout-en-bout validé ; amélioration UX de préparation en cours.** Snapshots serveur sûrs, deltas logiques, publication GitHub Release, bootstrap segmenté, téléchargement client, synchronisation pré-connexion, transaction SQLite, rollback multi-dimensions et récupération après crash sont implémentés. La première publication et la première vraie reconnexion client restent à valider avant merge.
+> **État : 0.6.0-mvp, flux bout-en-bout validé ; rollback incrémental compact prêt à tester.** Snapshots serveur sûrs, deltas logiques, publication GitHub Release, bootstrap segmenté et synchronisation pré-connexion réelle sont validés. Le chemin incrémental peut désormais appliquer un petit delta directement sur une DB DH fermée avec un reverse-delta compact et un journal crash-safe, sans recopier ~10 Go à chaque mise à jour.
 
 ## Cible
 
@@ -22,7 +22,11 @@ GabCon ne modifie jamais la DB DH active.
 
 Côté serveur, `/gabcondhsync snapshot` utilise l'API publique DH pour passer temporairement le monde en lecture seule, récupère les dossiers via `IDhApiLevelWrapper.getDhSaveFolder()`, puis utilise le backup SQLite en ligne du pilote `dh_sqlite`. Chaque copie passe `PRAGMA quick_check`.
 
-Côté client, les deltas sont appliqués uniquement avant connexion sur un fichier `.gabcon-work`. Les sidecars actifs `-wal/-shm` provoquent un refus. Toutes les dimensions sont préparées avant le premier remplacement. Les anciennes DB sont renommées en rollback, les nouvelles sont installées, puis l'état GabCon est commité. Un journal de récupération permet de restaurer automatiquement après un crash. Un seul rollback vérifié par dimension est conservé.
+Côté client, aucune écriture n'est faite pendant qu'une DB DH est active ; les sidecars actifs `-wal/-shm` provoquent un refus.
+
+Pour un **bootstrap** (ou si `compactIncrementalApply=false`), GabCon conserve le modèle historique : préparation dans un fichier `.gabcon-work`, vérification, remplacement atomique et rollback complet.
+
+Pour une mise à jour **delta-only** avec `compactIncrementalApply=true`, GabCon ne recopie plus toute la DB. Avant chaque delta, il crée un reverse-delta compact contenant uniquement les anciennes lignes touchées et les clés des nouvelles lignes. Ce rollback est journalisé avant la transaction SQLite. Si un crash survient avant le commit de l'état client, les reverse-deltas sont rejoués en ordre inverse au prochain démarrage. Cette restauration est idempotente, donc elle reste sûre même si le crash a eu lieu juste avant ou juste après le commit SQLite.
 
 ## Commandes serveur
 
@@ -236,6 +240,24 @@ La première reconnexion de ce profil doit donc sélectionner le bootstrap de la
 
 Le premier écran réel de pré-connexion s'affichait correctement mais le flou de menu Minecraft rendait aussi le texte/progress moins lisible sur cette configuration. `ClientSyncScreen` n'utilise plus le blur du menu : il affiche maintenant un voile sombre simple, du texte net et une barre de progression dédiée.
 
+## Rollback incrémental compact 0.6.0
+
+Le flux incrémental réel 0.5.x a montré que le téléchargement d'un delta de ~171 MiB était rapide, mais que la copie de préparation de la DB Overworld (~10 Go) prenait encore plusieurs minutes.
+
+0.6.0 introduit un chemin delta-only sans copie complète :
+
+1. vérifier que la DB cible est inactive et saine ;
+2. construire un reverse-delta compact à partir des seules clés touchées ;
+3. écrire `*.incremental.json` dans le journal de récupération ;
+4. appliquer le delta directement dans une transaction SQLite ;
+5. exécuter `quick_check` ;
+6. mettre à jour la baseline logique dans `client-state.json` ;
+7. marquer le journal `STATE_COMMITTED`, puis supprimer le rollback compact.
+
+En cas d'échec ou de crash avant le commit de l'état, les reverse-deltas sont appliqués en ordre inverse. Les tests couvrent aussi le cas ambigu où le forward delta n'a jamais été commit : rejouer le reverse-delta laisse alors l'ancienne DB logiquement inchangée.
+
+La configuration client contient `compactIncrementalApply=true`. La passer à `false` réactive immédiatement le chemin conservateur à copie complète.
+
 ## Préparation incrémentale visible 0.5.4
 
 Le premier vrai test incrémental a confirmé que le client télécharge uniquement le nouveau delta publié, sans retélécharger le bootstrap ~10 Go. L'étape suivante `prepare` restait toutefois plusieurs minutes sur `Working...` parce que, par sécurité, GabCon recopie encore la DB Overworld locale complète vers `.gabcon-work` avant d'appliquer le petit delta.
@@ -272,23 +294,18 @@ Le bootstrap pré-connexion réel a réussi sur le client Windows/Java 21 avec 0
 
 Cela valide le flux réel `manifest -> bootstrap -> delta chain -> apply -> commit -> connect` sur une DB DH cliente connue.
 
-## Test réel 0.5 restant avant merge
+## Test réel 0.6 restant avant merge
 
-1. Installer 0.5 serveur + client.
-2. Définir `GABCON_DH_GITHUB_TOKEN` sur le processus serveur, sans publier la valeur.
-3. Exécuter `/gabcondhsync publish`.
-4. Vérifier la Release `gabcon-data-gabcon-main` et son `manifest.json`.
-5. Se connecter normalement une fois avec le client 0.5 et exécuter `/gabcondhsyncclient register`.
-6. Se déconnecter complètement.
-7. Se reconnecter :
-   - GabCon doit afficher l'écran de synchronisation ;
-   - premier passage : bootstrap GitHub + delta ;
-   - DB active jamais modifiée ;
-   - connexion automatique après succès.
-8. Produire ensuite un nouveau snapshot/delta/publish côté serveur.
-9. Reconnexion client : **seul le nouveau petit delta** doit être téléchargé.
+Le bootstrap réel et le premier sync incrémental sont déjà validés. Il reste uniquement à valider le nouveau rollback compact sur les vraies données :
 
-Après ce test, l'auto-publication périodique pourra être activée.
+1. installer `0.6.0-mvp` côté client avec `compactIncrementalApply=true` ;
+2. générer un nouveau snapshot/delta/publish côté serveur après quelques nouveaux chunks ;
+3. se reconnecter avec le client déjà bootstrapé ;
+4. vérifier que seul le nouveau delta est téléchargé ;
+5. vérifier que l'étape `prepare` construit un rollback compact au lieu de recopier ~10 Go ;
+6. confirmer la connexion puis la nouvelle baseline client.
+
+Le serveur peut conserver la version précédente pendant ce test : le changement 0.6.0 concerne uniquement l'application incrémentale côté client.
 
 ## Build et CI
 
@@ -311,6 +328,7 @@ GitHub Actions construit sous Java 21 et exécute les tests SQLite/manifest/down
 - aucune grosse DB dans l'historique Git ;
 - bootstrap/deltas uniquement via Release ;
 - vérification taille + SHA-256 + `quick_check` ;
-- journal crash-safe avant remplacement ;
-- rollback multi-dimensions ;
-- aucune fusion de la PR tant que le test réel 0.5 n'est pas validé.
+- journal crash-safe avant toute mutation incrémentale ;
+- reverse-delta compact et rollback multi-dimensions ;
+- mode de secours `compactIncrementalApply=false` ;
+- aucune fusion de la PR tant que le test réel 0.6 n'est pas validé.
