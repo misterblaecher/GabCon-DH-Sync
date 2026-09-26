@@ -2,7 +2,7 @@
 
 Mod **NeoForge 1.21.1 / Java 21** pour distribuer les données **Distant Horizons** d'un serveur Minecraft via **GitHub Releases**, afin d'éviter que le serveur domestique n'envoie directement plusieurs gigaoctets de LOD à chaque client.
 
-> **État : 0.5.3-mvp, flux bout-en-bout prêt à tester.** Snapshots serveur sûrs, deltas logiques, publication GitHub Release, bootstrap segmenté, téléchargement client, synchronisation pré-connexion, transaction SQLite, rollback multi-dimensions et récupération après crash sont implémentés. La première publication et la première vraie reconnexion client restent à valider avant merge.
+> **État : 0.5.4-mvp, flux bout-en-bout validé ; amélioration UX de préparation en cours.** Snapshots serveur sûrs, deltas logiques, publication GitHub Release, bootstrap segmenté, téléchargement client, synchronisation pré-connexion, transaction SQLite, rollback multi-dimensions et récupération après crash sont implémentés. La première publication et la première vraie reconnexion client restent à valider avant merge.
 
 ## Cible
 
@@ -235,6 +235,12 @@ La première reconnexion de ce profil doit donc sélectionner le bootstrap de la
 ## Correctif UI 0.5.1
 
 Le premier écran réel de pré-connexion s'affichait correctement mais le flou de menu Minecraft rendait aussi le texte/progress moins lisible sur cette configuration. `ClientSyncScreen` n'utilise plus le blur du menu : il affiche maintenant un voile sombre simple, du texte net et une barre de progression dédiée.
+
+## Préparation incrémentale visible 0.5.4
+
+Le premier vrai test incrémental a confirmé que le client télécharge uniquement le nouveau delta publié, sans retélécharger le bootstrap ~10 Go. L'étape suivante `prepare` restait toutefois plusieurs minutes sur `Working...` parce que, par sécurité, GabCon recopie encore la DB Overworld locale complète vers `.gabcon-work` avant d'appliquer le petit delta.
+
+0.5.4 conserve cette stratégie sûre mais affiche désormais la progression réelle de cette copie locale (octets copiés / taille totale et pourcentage) au lieu d'un écran apparemment bloqué. Le fichier original n'est toujours jamais modifié avant le commit final.
 
 ## Correctif deadlock téléchargement 0.5.3
 
