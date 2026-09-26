@@ -156,6 +156,18 @@ public final class GitHubReleaseClient {
         return true;
     }
 
+    public boolean assetMatches(
+            Release release,
+            String assetName,
+            long expectedSize,
+            String expectedSha256
+    ) {
+        AssetInfo info = release.assetsByName().get(assetName);
+        if (info == null || info.size() != expectedSize) return false;
+        String expected = expectedDigest(expectedSha256);
+        return expected.equalsIgnoreCase(nullToEmpty(info.digest()));
+    }
+
     public void requireAsset(
             Release release,
             String assetName,
