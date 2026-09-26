@@ -244,6 +244,12 @@ class ClientIncrementalRecoveryJournalTest {
                         PRIMARY KEY(BlockPosX,BlockPosY,BlockPosZ)
                     )
                     """);
+            c.createStatement().execute("""
+                    CREATE TABLE Legacy_FullData_V1(
+                        DhSectionPos TEXT NOT NULL PRIMARY KEY,
+                        MigrationFailed INTEGER NOT NULL DEFAULT 0
+                    )
+                    """);
             c.createStatement().execute(
                     "INSERT INTO FullData VALUES (0,1,1,0," + checksum + ",X'01',100,50)"
             );
