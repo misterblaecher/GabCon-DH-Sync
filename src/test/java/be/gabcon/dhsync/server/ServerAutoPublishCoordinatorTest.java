@@ -3,6 +3,7 @@ package be.gabcon.dhsync.server;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.lang.reflect.Modifier;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
@@ -14,6 +15,20 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class ServerAutoPublishCoordinatorTest {
     @TempDir Path temp;
+
+
+    @Test
+    void statusAndLongRunningPipelineDoNotShareIntrinsicMonitor() throws Exception {
+        var status = ServerAutoPublishCoordinator.class.getDeclaredMethod("status", Duration.class);
+        var run = ServerAutoPublishCoordinator.class.getDeclaredMethod(
+                "runIfDue", int.class, Duration.class
+        );
+
+        assertFalse(Modifier.isSynchronized(status.getModifiers()),
+                "status must never block the server thread behind a long publication");
+        assertFalse(Modifier.isSynchronized(run.getModifiers()),
+                "the snapshot/upload pipeline must not hold the coordinator monitor");
+    }
 
     @Test
     void thresholdRunsFullPipelineAndKeepsChangesSavedDuringPublish() throws Exception {
