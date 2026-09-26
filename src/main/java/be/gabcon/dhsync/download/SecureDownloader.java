@@ -39,7 +39,6 @@ public final class SecureDownloader {
                 .connectTimeout(Duration.ofSeconds(15))
                 .followRedirects(HttpClient.Redirect.NORMAL)
                 .version(HttpClient.Version.HTTP_1_1)
-                .executor(executor)
                 .build();
     }
 
