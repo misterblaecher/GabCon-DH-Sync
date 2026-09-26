@@ -183,7 +183,7 @@ public final class DhReverseDeltaBuilder {
     }
 
     private static String qident(String value) {
-        return """ + value.replace(""", """") + """;
+        return "\"" + value.replace("\"", "\"\"") + "\"";
     }
 
     private static String sqliteQuote(String value) {
