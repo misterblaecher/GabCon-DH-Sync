@@ -2,7 +2,7 @@
 
 Mod **NeoForge 1.21.1 / Java 21** pour distribuer les données **Distant Horizons** d'un serveur Minecraft via **GitHub Releases**, afin d'éviter que le serveur domestique n'envoie directement plusieurs gigaoctets de LOD à chaque client.
 
-> **État : 0.7.0-rc1 en intégration.** La base 0.6.2 reste la version stable validée sur GabCon. La RC 0.7 ajoute l'auto-publication serveur crash-safe, une matrice CI de crash/recovery client et la validation SHA-256 distante des assets GitHub. Ces trois blocs sont intégrés sur `release/0.7.0` et doivent encore passer la validation réelle serveur/client avant merge vers `main`.
+> **État : 0.7.0-rc2 en validation réelle.** La base 0.6.2 reste la version stable validée sur GabCon. La RC 0.7 ajoute l'auto-publication serveur crash-safe, une matrice CI de crash/recovery client et la validation SHA-256 distante des assets GitHub. Les blockers de revue RC1 ont été corrigés : status non bloquant pendant les uploads, réparation SHA non destructive pour les assets encore référencés, et conservation de l'âge du dirty marker entre redémarrages. La CI d'intégration est verte ; il reste la validation réelle serveur/client avant merge vers `main`.
 
 ## Cible
 
