@@ -36,10 +36,22 @@ public final class ChangedRegionTracker {
      * becomes visible in the pending map.
      */
     public synchronized boolean markChunkSaved(String dimension, int chunkX, int chunkZ) {
+        return markChunkSavedAt(dimension, chunkX, chunkZ, clock.instant());
+    }
+
+    public synchronized boolean markChunkSavedAt(
+            String dimension,
+            int chunkX,
+            int chunkZ,
+            Instant observedAt
+    ) {
         boolean wasClean = pending.isEmpty();
         RegionKey key = RegionKey.fromChunk(dimension, chunkX, chunkZ);
         PendingRegion previous = pending.get(key);
-        Instant firstSeen = previous == null ? clock.instant() : previous.firstSeen();
+        Instant candidate = observedAt == null ? clock.instant() : observedAt;
+        Instant firstSeen = previous == null
+                ? candidate
+                : (candidate.isBefore(previous.firstSeen()) ? candidate : previous.firstSeen());
         long next = ++sequence;
         pending.put(key, new PendingRegion(next, firstSeen));
         return wasClean;
