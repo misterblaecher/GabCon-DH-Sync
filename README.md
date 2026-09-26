@@ -2,7 +2,7 @@
 
 Mod **NeoForge 1.21.1 / Java 21** pour distribuer les données **Distant Horizons** d'un serveur Minecraft via **GitHub Releases**, afin d'éviter que le serveur domestique n'envoie directement plusieurs gigaoctets de LOD à chaque client.
 
-> **État : 0.5.1-mvp, flux bout-en-bout prêt à tester.** Snapshots serveur sûrs, deltas logiques, publication GitHub Release, bootstrap segmenté, téléchargement client, synchronisation pré-connexion, transaction SQLite, rollback multi-dimensions et récupération après crash sont implémentés. La première publication et la première vraie reconnexion client restent à valider avant merge.
+> **État : 0.5.2-mvp, flux bout-en-bout prêt à tester.** Snapshots serveur sûrs, deltas logiques, publication GitHub Release, bootstrap segmenté, téléchargement client, synchronisation pré-connexion, transaction SQLite, rollback multi-dimensions et récupération après crash sont implémentés. La première publication et la première vraie reconnexion client restent à valider avant merge.
 
 ## Cible
 
@@ -235,6 +235,18 @@ La première reconnexion de ce profil doit donc sélectionner le bootstrap de la
 ## Correctif UI 0.5.1
 
 Le premier écran réel de pré-connexion s'affichait correctement mais le flou de menu Minecraft rendait aussi le texte/progress moins lisible sur cette configuration. `ClientSyncScreen` n'utilise plus le blur du menu : il affiche maintenant un voile sombre simple, du texte net et une barre de progression dédiée.
+
+## Correctif transport GitHub 0.5.2
+
+Un test réel Windows/Java 21 a montré un cas où `manifest.json` était accessible mais les connexions Java vers les gros assets GitHub expiraient avant le premier octet. Avec un seul téléchargement à la fois, l'ancien code essayait quand même les 10 morceaux Overworld + le delta, ce qui pouvait retarder l'erreur d'environ 8 minutes.
+
+0.5.2 durcit ce chemin :
+
+- HTTP/1.1 forcé pour le manifest et les assets GitHub ;
+- l'écran passe à `download` **avant** la connexion de l'asset, donc un timeout n'est plus affiché comme un blocage `manifest` ;
+- les assets déjà complètement téléchargés sont réutilisés après validation taille + SHA-256 ;
+- téléchargement par petits lots limités à `maxConcurrentDownloads` : un échec empêche de lancer les lots suivants ;
+- valeur par défaut `maxConcurrentDownloads=1` pour les gros assets Release.
 
 ## Test réel 0.5 restant avant merge
 
