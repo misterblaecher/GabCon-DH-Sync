@@ -24,11 +24,12 @@ public final class DistributionManifestClient {
         HttpClient client = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(15))
                 .followRedirects(HttpClient.Redirect.NORMAL)
+                .version(HttpClient.Version.HTTP_1_1)
                 .build();
         HttpRequest request = HttpRequest.newBuilder(uri)
                 .GET()
                 .timeout(Duration.ofSeconds(30))
-                .header("User-Agent", "GabConDHSync/0.5")
+                .header("User-Agent", "GabConDHSync/0.5.2")
                 .build();
 
         HttpResponse<InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
