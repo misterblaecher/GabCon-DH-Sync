@@ -86,7 +86,8 @@ public final class ClientPreConnectController {
 
             Throwable cause = unwrap(error);
             GabConDhSync.LOGGER.error("[GabConDHSync] Pre-connect sync failed for " + serverKey, cause);
-            boolean recoveryPending = Files.exists(ClientRecoveryJournal.pathFor(serverKey));
+            boolean recoveryPending = Files.exists(ClientRecoveryJournal.pathFor(serverKey))
+                    || Files.exists(ClientIncrementalRecoveryJournal.pathFor(serverKey));
             if (ClientConfig.ALLOW_FALLBACK.get() && !recoveryPending) {
                 GabConDhSync.LOGGER.warn("[GabConDHSync] Falling back to normal Distant Horizons networking for {}.", serverKey);
                 resume(parent, minecraft, serverAddress, serverData, isQuickPlay, transferState);
