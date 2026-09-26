@@ -2,7 +2,7 @@
 
 Mod **NeoForge 1.21.1 / Java 21** pour distribuer les données **Distant Horizons** d'un serveur Minecraft via **GitHub Releases**, afin d'éviter que le serveur domestique n'envoie directement plusieurs gigaoctets de LOD à chaque client.
 
-> **État : 0.6.2-mvp, rollback compact validé sur la DB réelle ; le chemin incrémental ne rescane plus toute la DB DH à chaque petit delta.** Snapshots serveur sûrs, deltas logiques, publication GitHub Release, bootstrap segmenté et synchronisation pré-connexion réelle sont validés. Le chemin incrémental peut désormais appliquer un petit delta directement sur une DB DH fermée avec un reverse-delta compact et un journal crash-safe, sans recopier ~10 Go à chaque mise à jour.
+> **État : 0.6.2-mvp, code et CI validés ; validation réelle finale encore requise avant merge.** Snapshots serveur sûrs, deltas logiques, publication GitHub Release, bootstrap segmenté, synchronisation pré-connexion et rollback compact 0.6.0/0.6.1 sont validés sur les vraies données GabCon. Le nouveau delta 0.6.2 a été téléchargé par le client réel sans retélécharger le bootstrap ; il reste à confirmer l'application complète, les timings du fast-path et la reprise de connexion Minecraft avant de retirer le statut MVP.
 
 ## Cible
 
@@ -179,7 +179,7 @@ Le premier test 0.5 garde volontairement `autoPublish=false` : la séquence manu
 - `connectOnComplete=true`
 - `allowFallback=true`
 - `interceptManagedConnections=true`
-- `maxConcurrentDownloads=2`
+- `maxConcurrentDownloads=1`
 - `optionalDownloadSpeedLimit=0` (0 = illimité)
 - `maxDownloadBytes=2147483648`
 - `worldId=gabcon-main`
@@ -322,18 +322,19 @@ Le bootstrap pré-connexion réel a réussi sur le client Windows/Java 21 avec 0
 
 Cela valide le flux réel `manifest -> bootstrap -> delta chain -> apply -> commit -> connect` sur une DB DH cliente connue.
 
-## Test réel 0.6 restant avant merge
+## Test réel 0.6.2 restant avant merge
 
-Le bootstrap réel et le premier sync incrémental sont déjà validés. Il reste uniquement à valider le nouveau rollback compact sur les vraies données :
+Les validations réelles 0.6.0 et 0.6.1 sont terminées. Le dernier candidat 0.6.2 est publié côté données avec le delta :
 
-1. installer `0.6.0-mvp` côté client avec `compactIncrementalApply=true` ;
-2. générer un nouveau snapshot/delta/publish côté serveur après quelques nouveaux chunks ;
-3. se reconnecter avec le client déjà bootstrapé ;
-4. vérifier que seul le nouveau delta est téléchargé ;
-5. vérifier que l'étape `prepare` construit un rollback compact au lieu de recopier ~10 Go ;
-6. confirmer la connexion puis la nouvelle baseline client.
+```text
+delta_minecraft_overworld_11ac8ffc9271_063c2940e2ef.sqlite
+```
 
-Le serveur peut conserver la version précédente pendant ce test : le changement 0.6.0 concerne uniquement l'application incrémentale côté client.
+La télémétrie GitHub Release confirme déjà que ce delta a été téléchargé une fois par le client réel et que les 10 parties du bootstrap Overworld n'ont pas été retéléchargées. Cela valide le choix `delta-only` du planner.
+
+Il reste une seule condition avant merge : confirmer côté client que l'application 0.6.2 se termine correctement, relever les timings `Compact rollback ready` et `Incremental delta applied`, vérifier `changed=true`, puis confirmer que Minecraft reprend la connexion normalement avec la nouvelle baseline `063c2940e2ef...`.
+
+Un compteur de téléchargement GitHub ne prouve pas à lui seul le succès de la transaction SQLite ou de la connexion Minecraft ; ces deux points restent donc volontairement bloquants avant la fusion.
 
 ## Build et CI
 
@@ -359,4 +360,4 @@ GitHub Actions construit sous Java 21 et exécute les tests SQLite/manifest/down
 - journal crash-safe avant toute mutation incrémentale ;
 - reverse-delta compact et rollback multi-dimensions ;
 - mode de secours `compactIncrementalApply=false` ;
-- aucune fusion de la PR tant que le test réel 0.6 n'est pas validé.
+- aucune fusion de la PR tant que le test réel 0.6.2 n'est pas validé.
