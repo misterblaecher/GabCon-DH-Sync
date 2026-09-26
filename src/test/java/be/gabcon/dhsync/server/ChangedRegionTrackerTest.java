@@ -22,6 +22,29 @@ class ChangedRegionTrackerTest {
         assertFalse(tracker.snapshot().contains(RegionKey.fromChunk("minecraft:overworld", 64, 64)));
     }
 
+
+    @Test
+    void lifecycleClearDropsOldWorldEntriesButKeepsSequenceMonotonic() {
+        ChangedRegionTracker tracker = new ChangedRegionTracker(100L);
+        tracker.markChunkSaved("minecraft:overworld", 0, 0);
+        ChangedRegionTracker.Capture oldWorld = tracker.capture();
+
+        tracker.clear();
+        assertEquals(0, tracker.pendingCount());
+
+        tracker.markChunkSaved("minecraft:the_nether", 0, 0);
+        ChangedRegionTracker.Capture newWorld = tracker.capture();
+        assertTrue(newWorld.watermark() > oldWorld.watermark());
+
+        // Even if a stale old-world cycle reaches its acknowledgement call,
+        // its captured watermark cannot remove a new-world save.
+        tracker.acknowledgeThrough(oldWorld.watermark());
+        assertEquals(1, tracker.pendingCount());
+        assertTrue(tracker.snapshot().contains(
+                RegionKey.fromChunk("minecraft:the_nether", 0, 0)
+        ));
+    }
+
     @Test
     void ensureSequenceFloorProtectsChangesObservedAfterRestart() {
         ChangedRegionTracker tracker = new ChangedRegionTracker(0L);
