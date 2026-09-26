@@ -91,6 +91,34 @@ public final class DhDeltaApplier {
         return applyVerified(target, delta, meta);
     }
 
+    /**
+     * Applies a delta after the caller has already quick-checked both databases.
+     * The target is still quick-checked after the transaction before success is returned.
+     */
+    public static WorkingApplyResult applyToPrecheckedWorkingCopy(
+            Path workDatabase,
+            Path deltaDatabase,
+            String currentServerBaselineSha256
+    ) throws Exception {
+        Path work = workDatabase.toAbsolutePath().normalize();
+        Path delta = deltaDatabase.toAbsolutePath().normalize();
+        requireRegularFile(work, "Working DH database");
+        requireRegularFile(delta, "Delta database");
+        requireSha256(currentServerBaselineSha256, "currentServerBaselineSha256");
+
+        DeltaMeta meta = readDeltaMeta(delta);
+        if (!currentServerBaselineSha256.equalsIgnoreCase(meta.oldSha256())) {
+            throw new IllegalStateException(
+                    "Delta chain mismatch: current server baseline "
+                            + currentServerBaselineSha256 + " != expected " + meta.oldSha256()
+            );
+        }
+
+        List<TableApplyStats> stats = applyIntoWorkingCopy(work, delta);
+        DhSqliteSnapshotter.verify(work);
+        return new WorkingApplyResult(meta.newSha256(), List.copyOf(stats));
+    }
+
     public static WorkingApplyResult applyToWorkingCopy(
             Path workDatabase,
             Path deltaDatabase,
@@ -201,14 +229,20 @@ public final class DhDeltaApplier {
         String qDelete = qident(table + "Delete");
         String qUpsert = qident(table + "Upsert");
 
-        String keyMatch = primaryKey.stream()
-                .map(c -> "d." + qident(c.name()) + " = main." + qt + "." + qident(c.name()))
-                .reduce((a, b) -> a + " AND " + b)
+        String targetKeyTuple = primaryKey.stream()
+                .map(c -> qident(c.name()))
+                .reduce((a, b) -> a + ", " + b)
+                .orElseThrow();
+        String deltaKeyTuple = primaryKey.stream()
+                .map(c -> "d." + qident(c.name()))
+                .reduce((a, b) -> a + ", " + b)
                 .orElseThrow();
 
+        // Let SQLite probe the target primary-key index using the small delete-key set.
         long deletes = statement.executeUpdate(
                 "DELETE FROM main." + qt
-                        + " WHERE EXISTS (SELECT 1 FROM delta." + qDelete + " d WHERE " + keyMatch + ")"
+                        + " WHERE (" + targetKeyTuple + ") IN"
+                        + " (SELECT " + deltaKeyTuple + " FROM delta." + qDelete + " d)"
         );
 
         String allColumns = targetColumns.stream()
