@@ -31,9 +31,23 @@ public final class ServerAutoPublisher {
             dirtyMarkerPresent = ServerDirtyMarker.exists(dirtyMarker);
             if (dirtyMarkerPresent && ServerState.CHANGED_REGIONS.pendingCount() == 0) {
                 // A persisted dirty marker means the previous process observed at least
-                // one unpublished save. A synthetic pending bucket forces a fresh
-                // snapshot even if the world stays quiet after restart.
-                ServerState.CHANGED_REGIONS.markChunkSaved("gabcondhsync:persisted-dirty", 0, 0);
+                // one unpublished save. Restore its original age so repeated restarts
+                // cannot postpone interval-based publication indefinitely.
+                try {
+                    ServerState.CHANGED_REGIONS.markChunkSavedAt(
+                            "gabcondhsync:persisted-dirty",
+                            0,
+                            0,
+                            ServerDirtyMarker.firstSeen(dirtyMarker)
+                    );
+                } catch (Exception e) {
+                    GabConDhSync.LOGGER.error(
+                            "[GabConDHSync] Failed to restore dirty marker age; using current time", e
+                    );
+                    ServerState.CHANGED_REGIONS.markChunkSaved(
+                            "gabcondhsync:persisted-dirty", 0, 0
+                    );
+                }
             }
 
             ServerAutoPublishCoordinator.Pipeline pipeline = new ServerAutoPublishCoordinator.Pipeline() {
