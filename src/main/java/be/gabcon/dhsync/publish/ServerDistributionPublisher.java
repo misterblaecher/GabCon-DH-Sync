@@ -18,6 +18,8 @@ import net.neoforged.fml.ModList;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.ByteBuffer;
+import java.nio.channels.SeekableByteChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
@@ -114,8 +116,31 @@ public final class ServerDistributionPublisher {
                 95
         );
         GitHubReleaseClient.Release refreshed = github.refresh(tag);
-        GabConDhSync.LOGGER.info("[GabConDHSync] Publishing manifest.json last.");
-        github.uploadReplacing(refreshed, "manifest.json", manifestPath, "application/json");
+        int repairedAssets = repairReferencedAssets(
+                manifest,
+                github,
+                refreshed,
+                worldId,
+                publishRoot,
+                Path.of("gabcondhsync").toAbsolutePath().normalize()
+        );
+        if (repairedAssets > 0) {
+            counters = counters.add(new Counters(repairedAssets, 0));
+            GabConDhSync.LOGGER.info(
+                    "[GabConDHSync] Repaired {} legacy/missing referenced Release asset(s).",
+                    repairedAssets
+            );
+            refreshed = github.refresh(tag);
+        }
+        verifyReferencedAssets(manifest, github, refreshed);
+        GabConDhSync.LOGGER.info("[GabConDHSync] Publishing manifest.json last after remote asset SHA-256 preflight.");
+        github.uploadReplacing(
+                refreshed,
+                "manifest.json",
+                manifestPath,
+                "application/json",
+                Hashes.sha256(manifestPath)
+        );
         GabConDhSync.LOGGER.info("[GabConDHSync] Published manifest.json.");
 
         return new PublicationResult(
@@ -193,7 +218,9 @@ public final class ServerDistributionPublisher {
                     );
                     GabConDhSync.LOGGER.info("[GabConDHSync] Publishing bootstrap asset {}/{}: {} ({} bytes)",
                             index + 1, partCount, name, written);
-                    boolean uploaded = github.uploadImmutable(release, name, temp, "application/octet-stream");
+                    boolean uploaded = github.uploadImmutable(
+                            release, name, temp, "application/octet-stream", sha
+                    );
                     if (uploaded) {
                         GabConDhSync.LOGGER.info("[GabConDHSync] Uploaded bootstrap asset: {}", name);
                     } else {
@@ -287,7 +314,9 @@ public final class ServerDistributionPublisher {
                         85
                 );
                 GabConDhSync.LOGGER.info("[GabConDHSync] Publishing delta asset: {} ({} bytes)", remoteName, file.size());
-                boolean uploaded = github.uploadImmutable(release, remoteName, source, "application/octet-stream");
+                boolean uploaded = github.uploadImmutable(
+                        release, remoteName, source, "application/octet-stream", file.sha256()
+                );
                 if (uploaded) {
                     GabConDhSync.LOGGER.info("[GabConDHSync] Uploaded delta asset: {}", remoteName);
                 } else {
@@ -323,9 +352,207 @@ public final class ServerDistributionPublisher {
         return new AppendDeltaResult(updated, counters);
     }
 
+    static int repairReferencedAssets(
+            DistributionManifest manifest,
+            GitHubReleaseClient github,
+            GitHubReleaseClient.Release release,
+            String worldId,
+            Path publishRoot,
+            Path dataRoot
+    ) throws Exception {
+        int repaired = 0;
+        Path staging = publishRoot.toAbsolutePath().normalize().resolve("staging");
+        Files.createDirectories(staging);
+
+        for (Map.Entry<String, DistributionManifest.DimensionDistribution> dimensionEntry
+                : manifest.dimensions().entrySet()) {
+            String dimension = dimensionEntry.getKey();
+            DistributionManifest.DimensionDistribution distribution = dimensionEntry.getValue();
+            DistributionManifest.BootstrapAsset bootstrap = distribution.bootstrap();
+
+            boolean bootstrapNeedsRepair = bootstrap.parts().stream().anyMatch(part ->
+                    !github.assetMatches(release, part.fileName(), part.size(), part.sha256()));
+
+            if (bootstrapNeedsRepair) {
+                SnapshotAssetSource source = findBootstrapSource(
+                        dataRoot, worldId, dimension, bootstrap.databaseSha256()
+                );
+                if (Files.size(source.path()) != bootstrap.totalSize()) {
+                    throw new IOException("Local bootstrap source size mismatch for " + dimension);
+                }
+                if (!Hashes.sha256(source.path()).equalsIgnoreCase(bootstrap.databaseSha256())) {
+                    throw new IOException("Local bootstrap source SHA mismatch for " + dimension);
+                }
+
+                long offset = 0L;
+                for (DistributionManifest.PartAsset part : bootstrap.parts()) {
+                    if (!github.assetMatches(release, part.fileName(), part.size(), part.sha256())) {
+                        Path temp = staging.resolve(part.fileName() + ".repair");
+                        Files.deleteIfExists(temp);
+                        writeSlice(source.path(), offset, part.size(), temp);
+                        try {
+                            if (Files.size(temp) != part.size()) {
+                                throw new IOException("Rebuilt bootstrap part size mismatch: " + part.fileName());
+                            }
+                            String sha = Hashes.sha256(temp);
+                            if (!sha.equalsIgnoreCase(part.sha256())) {
+                                throw new IOException("Rebuilt bootstrap part SHA mismatch: " + part.fileName());
+                            }
+                            github.uploadImmutable(
+                                    release,
+                                    part.fileName(),
+                                    temp,
+                                    "application/octet-stream",
+                                    part.sha256()
+                            );
+                            repaired++;
+                        } finally {
+                            Files.deleteIfExists(temp);
+                        }
+                    }
+                    offset = Math.addExact(offset, part.size());
+                }
+                if (offset != bootstrap.totalSize()) {
+                    throw new IOException("Bootstrap parts do not cover exact source size for " + dimension);
+                }
+            }
+
+            for (DistributionManifest.DeltaAsset delta : distribution.deltas()) {
+                if (github.assetMatches(release, delta.fileName(), delta.size(), delta.sha256())) {
+                    continue;
+                }
+                Path source = findDeltaSource(dataRoot, worldId, dimension, delta.sha256(), delta.size());
+                github.uploadImmutable(
+                        release,
+                        delta.fileName(),
+                        source,
+                        "application/octet-stream",
+                        delta.sha256()
+                );
+                repaired++;
+            }
+        }
+        return repaired;
+    }
+
+    private record SnapshotAssetSource(Path path, DhSnapshotService.SnapshotFile metadata) {}
+
+    private static SnapshotAssetSource findBootstrapSource(
+            Path dataRoot,
+            String worldId,
+            String dimension,
+            String databaseSha256
+    ) throws Exception {
+        for (SnapshotRef snapshot : allSnapshots(dataRoot, worldId)) {
+            for (DhSnapshotService.SnapshotFile file : snapshot.manifest().files()) {
+                if (!dimension.equals(file.dimension())) continue;
+                if (!databaseSha256.equalsIgnoreCase(file.sha256())) continue;
+
+                Path source = SafePaths.resolveAsset(snapshot.directory(), file.fileName());
+                if (!Files.isRegularFile(source)) {
+                    throw new IOException("Bootstrap repair source is missing: " + source);
+                }
+                if (Files.size(source) != file.size()) {
+                    throw new IOException("Bootstrap repair source size mismatch: " + source);
+                }
+                return new SnapshotAssetSource(source, file);
+            }
+        }
+        throw new IOException(
+                "No local snapshot can repair bootstrap asset for " + dimension
+                        + " baseline=" + databaseSha256
+        );
+    }
+
+    private static Path findDeltaSource(
+            Path dataRoot,
+            String worldId,
+            String dimension,
+            String sha256,
+            long expectedSize
+    ) throws Exception {
+        for (DeltaRef deltaRef : allDeltas(dataRoot, worldId)) {
+            for (DhDeltaBuilder.DeltaFile file : deltaRef.manifest().files()) {
+                if (!dimension.equals(file.dimension())) continue;
+                if (!sha256.equalsIgnoreCase(file.sha256())) continue;
+                Path source = SafePaths.resolveAsset(deltaRef.directory(), file.fileName());
+                if (!Files.isRegularFile(source)) {
+                    throw new IOException("Delta repair source is missing: " + source);
+                }
+                if (Files.size(source) != expectedSize || file.size() != expectedSize) {
+                    throw new IOException("Delta repair source size mismatch: " + source);
+                }
+                if (!Hashes.sha256(source).equalsIgnoreCase(sha256)) {
+                    throw new IOException("Delta repair source SHA mismatch: " + source);
+                }
+                return source;
+            }
+        }
+        throw new IOException(
+                "No local delta can repair remote asset for " + dimension + " sha256=" + sha256
+        );
+    }
+
+    private static void writeSlice(Path source, long offset, long size, Path destination) throws IOException {
+        if (offset < 0L || size <= 0L) throw new IOException("Invalid bootstrap slice");
+        Files.createDirectories(destination.toAbsolutePath().normalize().getParent());
+
+        try (SeekableByteChannel in = Files.newByteChannel(source, StandardOpenOption.READ);
+             OutputStream out = Files.newOutputStream(
+                     destination,
+                     StandardOpenOption.CREATE_NEW,
+                     StandardOpenOption.WRITE
+             )) {
+            if (offset > in.size() || size > in.size() - offset) {
+                throw new IOException("Bootstrap repair slice exceeds source size");
+            }
+            in.position(offset);
+            ByteBuffer buffer = ByteBuffer.allocate(1024 * 1024);
+            long remaining = size;
+            while (remaining > 0L) {
+                buffer.clear();
+                buffer.limit((int) Math.min(buffer.capacity(), remaining));
+                int read = in.read(buffer);
+                if (read < 0) throw new IOException("Unexpected EOF rebuilding bootstrap part");
+                if (read == 0) continue;
+                out.write(buffer.array(), 0, read);
+                remaining -= read;
+            }
+        } catch (Exception e) {
+            Files.deleteIfExists(destination);
+            throw e;
+        }
+    }
+
+    static void verifyReferencedAssets(
+            DistributionManifest manifest,
+            GitHubReleaseClient github,
+            GitHubReleaseClient.Release release
+    ) throws IOException {
+        for (DistributionManifest.DimensionDistribution dimension : manifest.dimensions().values()) {
+            for (DistributionManifest.PartAsset part : dimension.bootstrap().parts()) {
+                github.requireAsset(release, part.fileName(), part.size(), part.sha256());
+            }
+            for (DistributionManifest.DeltaAsset delta : dimension.deltas()) {
+                github.requireAsset(release, delta.fileName(), delta.size(), delta.sha256());
+            }
+        }
+    }
+
     private static SnapshotRef oldestSnapshot(String worldId) throws Exception {
-        Path root = Path.of("gabcondhsync", "snapshots", safeStem(worldId)).toAbsolutePath().normalize();
-        if (!Files.isDirectory(root)) throw new IOException("No snapshots found: " + root);
+        List<SnapshotRef> snapshots = allSnapshots(
+                Path.of("gabcondhsync").toAbsolutePath().normalize(), worldId
+        );
+        if (snapshots.isEmpty()) throw new IOException("No valid snapshots found for " + worldId);
+        return snapshots.getFirst();
+    }
+
+    private static List<SnapshotRef> allSnapshots(Path dataRoot, String worldId) throws Exception {
+        Path root = dataRoot.toAbsolutePath().normalize()
+                .resolve("snapshots")
+                .resolve(safeStem(worldId))
+                .normalize();
+        if (!Files.isDirectory(root)) return List.of();
 
         List<SnapshotRef> snapshots = new ArrayList<>();
         try (var stream = Files.list(root)) {
@@ -334,19 +561,25 @@ public final class ServerDistributionPublisher {
                 if (!Files.isRegularFile(json)) continue;
                 DhSnapshotService.SnapshotManifest manifest =
                         GSON.fromJson(Files.readString(json), DhSnapshotService.SnapshotManifest.class);
-                if (manifest != null && worldId.equals(manifest.worldId())) {
+                if (manifest != null && worldId.equals(manifest.worldId()) && manifest.files() != null) {
                     Instant.parse(manifest.createdAtUtc());
                     snapshots.add(new SnapshotRef(dir.toAbsolutePath().normalize(), manifest));
                 }
             }
         }
-        if (snapshots.isEmpty()) throw new IOException("No valid snapshots found for " + worldId);
         snapshots.sort(Comparator.comparing(s -> Instant.parse(s.manifest().createdAtUtc())));
-        return snapshots.getFirst();
+        return List.copyOf(snapshots);
     }
 
     private static List<DeltaRef> allDeltas(String worldId) throws Exception {
-        Path root = Path.of("gabcondhsync", "deltas", safeStem(worldId)).toAbsolutePath().normalize();
+        return allDeltas(Path.of("gabcondhsync").toAbsolutePath().normalize(), worldId);
+    }
+
+    private static List<DeltaRef> allDeltas(Path dataRoot, String worldId) throws Exception {
+        Path root = dataRoot.toAbsolutePath().normalize()
+                .resolve("deltas")
+                .resolve(safeStem(worldId))
+                .normalize();
         if (!Files.isDirectory(root)) return List.of();
 
         List<DeltaRef> deltas = new ArrayList<>();
