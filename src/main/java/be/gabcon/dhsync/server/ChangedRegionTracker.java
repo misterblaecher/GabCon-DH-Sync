@@ -1,5 +1,6 @@
 package be.gabcon.dhsync.server;
 
+import java.time.Clock;
 import java.time.Instant;
 import java.util.Collections;
 import java.util.NavigableMap;
@@ -13,14 +14,20 @@ public final class ChangedRegionTracker {
     private record PendingRegion(long sequence, Instant firstSeen) {}
 
     private final NavigableMap<RegionKey, PendingRegion> pending = new TreeMap<>();
+    private final Clock clock;
     private long sequence;
 
     public ChangedRegionTracker() {
-        this(initialSequence());
+        this(initialSequence(), Clock.systemUTC());
     }
 
     ChangedRegionTracker(long initialSequence) {
+        this(initialSequence, Clock.systemUTC());
+    }
+
+    ChangedRegionTracker(long initialSequence, Clock clock) {
         this.sequence = Math.max(0L, initialSequence);
+        this.clock = clock;
     }
 
     /**
@@ -32,7 +39,7 @@ public final class ChangedRegionTracker {
         boolean wasClean = pending.isEmpty();
         RegionKey key = RegionKey.fromChunk(dimension, chunkX, chunkZ);
         PendingRegion previous = pending.get(key);
-        Instant firstSeen = previous == null ? Instant.now() : previous.firstSeen();
+        Instant firstSeen = previous == null ? clock.instant() : previous.firstSeen();
         long next = ++sequence;
         pending.put(key, new PendingRegion(next, firstSeen));
         return wasClean;
