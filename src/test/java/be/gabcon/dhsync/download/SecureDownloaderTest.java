@@ -53,6 +53,23 @@ class SecureDownloaderTest {
     private static void serveRangeAware(HttpExchange exchange,byte[] data)throws IOException { String range=exchange.getRequestHeaders().getFirst("Range"); if(range!=null&&range.startsWith("bytes=")){int start=Integer.parseInt(range.substring("bytes=".length(),range.length()-1)); byte[] body=Arrays.copyOfRange(data,start,data.length); exchange.getResponseHeaders().set("Content-Range","bytes "+start+"-"+(data.length-1)+"/"+data.length); send(exchange,206,body);} else send(exchange,200,data); }
     private static void send(HttpExchange exchange,int status,byte[] body)throws IOException { exchange.sendResponseHeaders(status,body.length); try(var out=exchange.getResponseBody()){out.write(body);} }
 
+
+    @Test void asyncDownloadCompletesWithSingleThreadConcurrencyPool() throws Exception {
+        byte[] data = new byte[64 * 1024];
+        for (int i = 0; i < data.length; i++) data[i] = (byte) (i * 17);
+
+        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/asset", exchange -> send(exchange, 200, data));
+        server.start();
+
+        try (var executor = Executors.newSingleThreadExecutor()) {
+            Path result = new SecureDownloader(executor)
+                    .download(request("single-thread.gcdh", data.length, sha(data)), ignored -> {})
+                    .get(10, java.util.concurrent.TimeUnit.SECONDS);
+            assertArrayEquals(data, Files.readAllBytes(result));
+        }
+    }
+
     @Test void reusesVerifiedFinalFileWithoutNetwork() throws Exception {
         byte[] data = "verified cache".getBytes();
         String fileName = "cached.gcdh";
