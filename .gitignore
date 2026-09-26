@@ -1,0 +1,13 @@
+.gradle/
+build/
+run/
+.idea/
+*.iml
+*.log
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.part
+
+# Runtime snapshots, deltas, downloads, state and publication staging
+gabcondhsync/
