@@ -2,7 +2,7 @@
 
 Mod **NeoForge 1.21.1 / Java 21** pour distribuer les données **Distant Horizons** d'un serveur Minecraft via **GitHub Releases**, afin d'éviter que le serveur domestique n'envoie directement plusieurs gigaoctets de LOD à chaque client.
 
-> **État : 0.6.0-mvp, flux bout-en-bout validé ; rollback incrémental compact prêt à tester.** Snapshots serveur sûrs, deltas logiques, publication GitHub Release, bootstrap segmenté et synchronisation pré-connexion réelle sont validés. Le chemin incrémental peut désormais appliquer un petit delta directement sur une DB DH fermée avec un reverse-delta compact et un journal crash-safe, sans recopier ~10 Go à chaque mise à jour.
+> **État : 0.6.1-mvp, flux bout-en-bout et rollback incrémental compact validés sur la DB réelle ; optimisation des gros index DH prête à retester.** Snapshots serveur sûrs, deltas logiques, publication GitHub Release, bootstrap segmenté et synchronisation pré-connexion réelle sont validés. Le chemin incrémental peut désormais appliquer un petit delta directement sur une DB DH fermée avec un reverse-delta compact et un journal crash-safe, sans recopier ~10 Go à chaque mise à jour.
 
 ## Cible
 
@@ -239,6 +239,12 @@ La première reconnexion de ce profil doit donc sélectionner le bootstrap de la
 ## Correctif UI 0.5.1
 
 Le premier écran réel de pré-connexion s'affichait correctement mais le flou de menu Minecraft rendait aussi le texte/progress moins lisible sur cette configuration. `ClientSyncScreen` n'utilise plus le blur du menu : il affiche maintenant un voile sombre simple, du texte net et une barre de progression dédiée.
+
+## Optimisation rollback compact 0.6.1
+
+Le premier test réel 0.6.0 a réussi sur la DB client Overworld d'environ 10 Gio, mais `building compact rollback` a encore pris plusieurs minutes pour un delta de 1606 opérations (~40 Mio).
+
+La cause était algorithmique : le reverse-delta 0.6.0 parcourait les grosses tables cibles et cherchait ensuite les clés dans le petit delta. 0.6.1 inverse la requête : il parcourt les seules clés modifiées du delta puis sonde les index de clé primaire des tables DH. Le chemin d'application des suppressions suit la même stratégie. Un `quick_check` complet redondant entre la construction du rollback et l'application directe est également supprimé ; la DB reste vérifiée avant mutation et après la transaction.
 
 ## Rollback incrémental compact 0.6.0
 
