@@ -1,5 +1,6 @@
 package be.gabcon.dhsync.client;
 
+import be.gabcon.dhsync.GabConDhSync;
 import be.gabcon.dhsync.config.ClientConfig;
 import be.gabcon.dhsync.distribution.DistributionManifest;
 import be.gabcon.dhsync.download.DownloadProgress;
@@ -182,15 +183,27 @@ public final class ClientSyncEngine {
 
                     sink.update(
                             "prepare",
-                            dimension.dimension() + " — building compact rollback",
+                            dimension.dimension() + " — validating DB + building compact rollback",
                             0,
                             0
                     );
+                    long rollbackStarted = System.nanoTime();
                     DhReverseDeltaBuilder.Result reverse = DhReverseDeltaBuilder.build(
                             target,
                             deltaPath,
                             reversePath,
                             baseline
+                    );
+                    long rollbackMillis = (System.nanoTime() - rollbackStarted) / 1_000_000L;
+                    long restoreRows = reverse.tables().stream().mapToLong(DhReverseDeltaBuilder.TableStats::restoreRows).sum();
+                    long deleteRows = reverse.tables().stream().mapToLong(DhReverseDeltaBuilder.TableStats::deleteRows).sum();
+                    GabConDhSync.LOGGER.info(
+                            "[GabConDHSync] Compact rollback ready for {} in {} ms: {} bytes, restoreRows={}, deleteRows={}",
+                            dimension.dimension(),
+                            rollbackMillis,
+                            Files.size(reverse.rollbackDelta()),
+                            restoreRows,
+                            deleteRows
                     );
 
                     ClientIncrementalRecoveryJournal.Entry entry =
@@ -215,10 +228,18 @@ public final class ClientSyncEngine {
                             0,
                             0
                     );
+                    long applyStarted = System.nanoTime();
                     DhDeltaApplier.WorkingApplyResult applied = DhDeltaApplier.applyToPrecheckedWorkingCopy(
                             target,
                             deltaPath,
                             baseline
+                    );
+                    long applyMillis = (System.nanoTime() - applyStarted) / 1_000_000L;
+                    GabConDhSync.LOGGER.info(
+                            "[GabConDHSync] Incremental delta applied for {} in {} ms: {}",
+                            dimension.dimension(),
+                            applyMillis,
+                            delta.fileName()
                     );
                     baseline = applied.nextServerBaselineSha256();
                 }
