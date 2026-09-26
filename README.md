@@ -2,7 +2,7 @@
 
 Mod **NeoForge 1.21.1 / Java 21** pour distribuer les données **Distant Horizons** d'un serveur Minecraft via **GitHub Releases**, afin d'éviter que le serveur domestique n'envoie directement plusieurs gigaoctets de LOD à chaque client.
 
-> **État : 0.6.2, validation réelle finale PASS.** Snapshots serveur sûrs, deltas logiques, publication GitHub Release, bootstrap segmenté, synchronisation pré-connexion et rollback compact sont validés sur les vraies données GabCon. Le client 0.6.2 a pris le chemin delta-only sans retélécharger le bootstrap ; un démarrage de contrôle immédiatement après voit la baseline déjà à jour (`changed=false`) et reprend normalement la connexion Minecraft.
+> **État : 0.7.0-rc3 en validation réelle.** La base 0.6.2 reste la version stable validée sur GabCon. La RC 0.7 ajoute l'auto-publication serveur crash-safe, une matrice CI de crash/recovery client et la validation SHA-256 distante des assets GitHub. Les blockers de revue ont été corrigés : status non bloquant pendant les uploads, réparation SHA non destructive pour les assets encore référencés, récupération sûre du manifest distant si la copie locale manque, conservation de l'âge du dirty marker entre redémarrages, et isolation/cancellation des tâches auto-publish entre cycles de serveur intégré. La CI d'intégration est verte ; il reste la validation réelle serveur/client avant merge vers `main`.
 
 ## Cible
 
@@ -77,7 +77,7 @@ Il ne doit jamais être écrit dans le dépôt, le JAR, une config client ou un 
 
 La première publication choisit le snapshot valide le plus ancien comme bootstrap. Les DB sont découpées par défaut en morceaux de **1 GiB**, chaque morceau reçoit taille + SHA-256, puis les deltas sont ajoutés dans l'ordre. `manifest.json` est uploadé **en dernier**, donc un client ne peut pas voir un manifest référençant des assets encore incomplets.
 
-Les noms de bootstrap/deltas sont immuables et liés aux baselines. Si un premier upload de plusieurs GiB est interrompu, relancer `/gabcondhsync publish` réutilise les assets déjà présents de même nom/taille.
+Les noms de bootstrap/deltas sont immuables et liés aux baselines. En 0.7, un asset distant n'est réutilisé que si **nom + taille + digest SHA-256 GitHub** correspondent. Un asset absent, de mauvais digest ou issu d'une ancienne Release sans digest est reconstruit depuis les snapshots/deltas locaux puis ré-uploadé. `manifest.json` n'est remplacé qu'après un preflight SHA-256 de tous les assets qu'il référence.
 
 Les publications suivantes uploadent uniquement les nouveaux deltas puis remplacent `manifest.json`.
 
@@ -170,7 +170,15 @@ Si `allowFallback=true` et qu'aucune récupération critique n'est en attente, u
 - `maxDownloadBytes=2147483648`
 - `bootstrapPartBytes=1073741824`
 
-Le premier test 0.5 garde volontairement `autoPublish=false` : la séquence manuelle `snapshot → delta → publish` doit être validée une fois en conditions réelles avant d'activer l'automatisation périodique.
+`autoPublish=false` reste la valeur par défaut pendant la RC 0.7. Quand il est activé, le serveur déclenche automatiquement `snapshot → delta → publish` dès que `changedRegionThreshold` est atteint, ou quand le plus ancien changement pending dépasse `publishIntervalMinutes`. Les changements sont acquittés uniquement après publication et vérification du manifest distant ; un échec conserve le cycle et les changements pending pour reprise.
+
+## Fiabilité 0.7.0
+
+L'auto-publication utilise un watermark atomique des régions modifiées et un état persistant par phases. Une sauvegarde de chunk arrivée pendant une publication reste pending pour le cycle suivant. Un marqueur `dirty` persiste avant l'état mémoire afin qu'un arrêt ou crash serveur ne puisse pas oublier des changements encore non publiés. Au démarrage, un cycle interrompu reprend sa phase au lieu de remplacer silencieusement son snapshot.
+
+Les chemins de commit client sont couverts par une matrice de fault injection : `PREPARED`, installation partielle des DB, `TARGETS_INSTALLED`, état client écrit avant `STATE_COMMITTED`, `STATE_COMMITTED`, recovery multi-dimension, journal corrompu et reverse-delta manquant. Le recovery incrémental rejoue de vrais reverse-deltas SQLite et les tests vérifient l'idempotence.
+
+Côté GitHub Release, le producteur lit le champ `digest` de chaque asset, valide le digest retourné après upload, pagine la liste complète des assets et répare les assets historiques non vérifiables avant le preflight final.
 
 ## Configuration client
 
