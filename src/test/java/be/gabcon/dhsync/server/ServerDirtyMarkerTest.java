@@ -21,9 +21,11 @@ class ServerDirtyMarkerTest {
         ServerDirtyMarker.mark(marker);
         assertTrue(ServerDirtyMarker.exists(marker));
 
-        // Re-marking is idempotent and intentionally cheap enough for conservative recovery.
+        // Re-marking must not reset the original age.
+        Instant firstSeen = ServerDirtyMarker.firstSeen(marker);
         ServerDirtyMarker.mark(marker);
         assertTrue(ServerDirtyMarker.exists(marker));
+        assertEquals(firstSeen, ServerDirtyMarker.firstSeen(marker));
 
         ServerDirtyMarker.clear(marker);
         assertFalse(ServerDirtyMarker.exists(marker));
