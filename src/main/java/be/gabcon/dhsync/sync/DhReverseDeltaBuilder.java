@@ -41,7 +41,7 @@ public final class DhReverseDeltaBuilder {
         DhSqliteSnapshotter.verify(target);
         DhSqliteSnapshotter.verify(forward);
 
-        DhDeltaApplier.DeltaMetadata meta = DhDeltaApplier.inspectDelta(forward);
+        DhDeltaApplier.DeltaMetadata meta = readVerifiedDeltaMeta(forward);
         if (!meta.oldSha256().equalsIgnoreCase(currentServerBaselineSha256)) {
             throw new IllegalStateException(
                     "Forward delta baseline mismatch: current=" + currentServerBaselineSha256
@@ -128,20 +128,23 @@ public final class DhReverseDeltaBuilder {
         statement.execute("CREATE TABLE " + qReverseDelete
                 + " AS SELECT " + pkSelect + " FROM targetdb." + qt + " WHERE 0");
 
-        String upsertMatch = primaryKey.stream()
+        String upsertJoin = primaryKey.stream()
                 .map(c -> "u." + qident(c.name()) + " = t." + qident(c.name()))
                 .reduce((a, b) -> a + " AND " + b)
                 .orElseThrow();
-        String deleteMatch = primaryKey.stream()
+        String deleteJoin = primaryKey.stream()
                 .map(c -> "d." + qident(c.name()) + " = t." + qident(c.name()))
                 .reduce((a, b) -> a + " AND " + b)
                 .orElseThrow();
 
+        // Drive the lookup from the small forward delta and probe the target's PK index.
+        // The old query scanned every row in the multi-gigabyte target table.
         long restoreRows = statement.executeUpdate(
                 "INSERT INTO " + qReverseUpsert
-                        + " SELECT t.* FROM targetdb." + qt + " t"
-                        + " WHERE EXISTS (SELECT 1 FROM forwarddb." + qForwardUpsert + " u WHERE " + upsertMatch + ")"
-                        + " OR EXISTS (SELECT 1 FROM forwarddb." + qForwardDelete + " d WHERE " + deleteMatch + ")"
+                        + " SELECT t.* FROM forwarddb." + qForwardUpsert + " u"
+                        + " JOIN targetdb." + qt + " t ON " + upsertJoin
+                        + " UNION SELECT t.* FROM forwarddb." + qForwardDelete + " d"
+                        + " JOIN targetdb." + qt + " t ON " + deleteJoin
         );
 
         String newRowMatch = primaryKey.stream()
@@ -163,6 +166,37 @@ public final class DhReverseDeltaBuilder {
         );
 
         return new TableStats(table, restoreRows, deleteRows);
+    }
+
+    private static DhDeltaApplier.DeltaMetadata readVerifiedDeltaMeta(Path delta) throws Exception {
+        Class.forName(DRIVER_CLASS);
+        try (Connection conn = DriverManager.getConnection(JDBC_PREFIX + delta);
+             Statement statement = conn.createStatement()) {
+            String format = scalarText(statement, "SELECT Value FROM DeltaMeta WHERE Key='format'");
+            if (!"gabcon-dh-delta-v1".equals(format)) {
+                throw new SQLException("Unsupported delta format: " + format);
+            }
+            String oldSha = scalarText(statement, "SELECT Value FROM DeltaMeta WHERE Key='oldSha256'");
+            String newSha = scalarText(statement, "SELECT Value FROM DeltaMeta WHERE Key='newSha256'");
+            requireSha256(oldSha, "oldSha256");
+            requireSha256(newSha, "newSha256");
+            return new DhDeltaApplier.DeltaMetadata(oldSha, newSha);
+        }
+    }
+
+    private static String scalarText(Statement statement, String sql) throws SQLException {
+        try (ResultSet rs = statement.executeQuery(sql)) {
+            if (!rs.next()) throw new SQLException("Query returned no row: " + sql);
+            String value = rs.getString(1);
+            if (value == null) throw new SQLException("Query returned null: " + sql);
+            return value;
+        }
+    }
+
+    private static void requireSha256(String value, String field) {
+        if (value == null || !value.matches("(?i)[0-9a-f]{64}")) {
+            throw new IllegalArgumentException("Invalid delta " + field);
+        }
     }
 
     private static List<Column> columns(Connection conn, String schema, String table) throws SQLException {
