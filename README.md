@@ -220,6 +220,18 @@ au niveau logique exact :
 
 Cela valide le format différentiel sur les vraies données GabCon. Le delta représente environ **0,35 %** du snapshot Overworld complet.
 
+## Validation réelle client : enregistrement
+
+Le premier test client 0.5 a validé l'enregistrement sur le vrai serveur GabCon :
+
+- serveur enregistré : `[fe80::79eba6b9cf7b2d]:25565` ;
+- `worldId=gabcon-main` ;
+- 1 DB DH actuellement découverte ;
+- `baselines=0`, attendu avant le premier bootstrap GabCon ;
+- URL du manifest : Release `gabcon-data-gabcon-main/manifest.json`.
+
+La première reconnexion de ce profil doit donc sélectionner le bootstrap de la dimension enregistrée, puis appliquer les deltas publiés jusqu'à la baseline la plus récente.
+
 ## Test réel 0.5 restant avant merge
 
 1. Installer 0.5 serveur + client.
