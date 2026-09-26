@@ -16,7 +16,7 @@ public final class ServerEvents {
         if (!ServerConfig.ENABLED.get()) return;
         if (!(event.getLevel() instanceof ServerLevel level)) return;
         var pos = event.getChunk().getPos();
-        ServerState.CHANGED_REGIONS.markChunkSaved(level.dimension().location().toString(), pos.x, pos.z);
+        ServerAutoPublisher.recordChunkSaved(level.dimension().location().toString(), pos.x, pos.z);
     }
 
     @SubscribeEvent
