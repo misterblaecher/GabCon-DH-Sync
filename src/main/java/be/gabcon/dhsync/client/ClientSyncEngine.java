@@ -83,7 +83,16 @@ public final class ClientSyncEngine {
                     work = DhBootstrapAssembler.assemble(dimension.databasePath(), dimension.bootstrap(), parts);
                     baseline = dimension.bootstrap().databaseSha256();
                 } else {
-                    work = DhOfflineFiles.copyToWork(dimension.databasePath());
+                    sink.update("prepare", dimension.dimension() + " — verifying/copying local DH database", 0, 0);
+                    work = DhOfflineFiles.copyToWork(
+                            dimension.databasePath(),
+                            (copied, total) -> sink.update(
+                                    "prepare",
+                                    dimension.dimension() + " — copying local DH database",
+                                    copied,
+                                    total
+                            )
+                    );
                     baseline = dimension.startingBaselineSha256();
                     if (baseline == null) throw new IllegalStateException("Missing starting baseline for " + dimension.dimension());
                 }
