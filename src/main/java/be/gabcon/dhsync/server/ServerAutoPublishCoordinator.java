@@ -88,6 +88,26 @@ public final class ServerAutoPublishCoordinator {
         tracker.ensureSequenceAtLeast(state.capturedWatermark() + 1L);
 
         try {
+            if (state.phase() != ServerAutoPublishStateStore.Phase.IDLE
+                    && state.phase() != ServerAutoPublishStateStore.Phase.CAPTURED) {
+                String currentPublishedBase = blankToNull(pipeline.resolvePublicationBase());
+                if (!sameOptionalPath(currentPublishedBase, state.baseSnapshotDirectory())) {
+                    // A manual publication advanced (or created) the manifest while
+                    // this automatic cycle was waiting to retry. Its prepared
+                    // snapshot/delta is now based on stale publication state, so
+                    // recapture the current pending set and restart the cycle.
+                    ChangedRegionTracker.Capture recapture = tracker.capture();
+                    state = state.withPhase(
+                            ServerAutoPublishStateStore.Phase.CAPTURED,
+                            recapture.watermark(),
+                            state.lastPublishedSnapshotDirectory(),
+                            null, null, null,
+                            now.toString(), state.lastSuccessUtc(), null
+                    );
+                    ServerAutoPublishStateStore.save(stateFile, state);
+                }
+            }
+
             if (state.phase() == ServerAutoPublishStateStore.Phase.IDLE) {
                 ChangedRegionTracker.Capture capture = tracker.capture();
                 if (capture.pendingCount() == 0) return new RunResult(false, false, "no pending regions");
@@ -241,5 +261,10 @@ public final class ServerAutoPublishCoordinator {
     private static boolean samePath(String a, String b) {
         if (a == null || b == null) return false;
         return Path.of(a).toAbsolutePath().normalize().equals(Path.of(b).toAbsolutePath().normalize());
+    }
+
+    private static boolean sameOptionalPath(String a, String b) {
+        if (a == null || b == null) return a == null && b == null;
+        return samePath(a, b);
     }
 }
