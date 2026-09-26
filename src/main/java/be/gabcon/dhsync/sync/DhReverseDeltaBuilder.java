@@ -38,7 +38,11 @@ public final class DhReverseDeltaBuilder {
 
         if (!Files.isRegularFile(target)) throw new IOException("Target DH database not found: " + target);
         if (!Files.isRegularFile(forward)) throw new IOException("Forward delta not found: " + forward);
-        DhSqliteSnapshotter.verify(target);
+
+        // The managed incremental path already requires the target DB to be offline.
+        // Do not quick_check the entire multi-gigabyte target here: the builder only
+        // reads rows named by the forward delta and validates their schema/keys below.
+        // The forward delta itself is small and must still pass quick_check.
         DhSqliteSnapshotter.verify(forward);
 
         DhDeltaApplier.DeltaMetadata meta = readVerifiedDeltaMeta(forward);
