@@ -2,7 +2,7 @@
 
 Mod **NeoForge 1.21.1 / Java 21** pour distribuer les données **Distant Horizons** d'un serveur Minecraft via **GitHub Releases**, afin d'éviter que le serveur domestique n'envoie directement plusieurs gigaoctets de LOD à chaque client.
 
-> **État : 0.5.2-mvp, flux bout-en-bout prêt à tester.** Snapshots serveur sûrs, deltas logiques, publication GitHub Release, bootstrap segmenté, téléchargement client, synchronisation pré-connexion, transaction SQLite, rollback multi-dimensions et récupération après crash sont implémentés. La première publication et la première vraie reconnexion client restent à valider avant merge.
+> **État : 0.5.3-mvp, flux bout-en-bout prêt à tester.** Snapshots serveur sûrs, deltas logiques, publication GitHub Release, bootstrap segmenté, téléchargement client, synchronisation pré-connexion, transaction SQLite, rollback multi-dimensions et récupération après crash sont implémentés. La première publication et la première vraie reconnexion client restent à valider avant merge.
 
 ## Cible
 
@@ -235,6 +235,12 @@ La première reconnexion de ce profil doit donc sélectionner le bootstrap de la
 ## Correctif UI 0.5.1
 
 Le premier écran réel de pré-connexion s'affichait correctement mais le flou de menu Minecraft rendait aussi le texte/progress moins lisible sur cette configuration. `ClientSyncScreen` n'utilise plus le blur du menu : il affiche maintenant un voile sombre simple, du texte net et une barre de progression dédiée.
+
+## Correctif deadlock téléchargement 0.5.3
+
+Le test réel 0.5.2 a atteint correctement l'étape `download`, mais est resté à 0.0 % sans timeout jusqu'à l'arrêt du jeu. La cause était un partage du même `ExecutorService` entre la tâche de téléchargement GabCon et les tâches internes de `java.net.http.HttpClient`. Avec `maxConcurrentDownloads=1`, l'unique thread pouvait rester bloqué dans `HttpClient.send()` alors que le client HTTP attendait lui-même du travail sur ce pool.
+
+0.5.3 laisse désormais `HttpClient` utiliser son exécuteur interne, tandis que le pool GabCon ne sert qu'à limiter le nombre de téléchargements concurrents. Un test de régression lance volontairement un téléchargement asynchrone avec un pool d'un seul thread et impose une limite de temps.
 
 ## Correctif transport GitHub 0.5.2
 
