@@ -2,11 +2,11 @@ package be.gabcon.dhsync.command;
 
 import be.gabcon.dhsync.GabConDhSync;
 import be.gabcon.dhsync.config.ServerConfig;
+import be.gabcon.dhsync.publish.ServerDistributionPublisher;
 import be.gabcon.dhsync.server.DhCompatibility;
 import be.gabcon.dhsync.server.DhDeltaBuilder;
 import be.gabcon.dhsync.server.DhSnapshotService;
 import be.gabcon.dhsync.server.ServerState;
-import be.gabcon.dhsync.publish.ServerDistributionPublisher;
 import com.mojang.brigadier.CommandDispatcher;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -30,6 +30,7 @@ public final class GabConCommands {
         source.sendSuccess(() -> Component.literal("[GabConDHSync] enabled=" + ServerConfig.ENABLED.get()
                 + ", worldId=" + ServerConfig.WORLD_ID.get()
                 + ", pendingBuckets=" + ServerState.CHANGED_REGIONS.pendingCount()
+                + ", " + ServerState.MAINTENANCE_PROGRESS.summary()
                 + ", snapshotRunning=" + ServerState.SNAPSHOT_RUNNING.get()
                 + ", deltaRunning=" + ServerState.DELTA_RUNNING.get()
                 + ", publishRunning=" + ServerState.PUBLISH_RUNNING.get()
@@ -54,25 +55,30 @@ public final class GabConCommands {
 
         if (ServerState.DELTA_RUNNING.get() || ServerState.PUBLISH_RUNNING.get()
                 || !ServerState.SNAPSHOT_RUNNING.compareAndSet(false, true)) {
-            source.sendFailure(Component.literal("[GabConDHSync] Another maintenance operation is already running."));
+            source.sendFailure(Component.literal("[GabConDHSync] Another maintenance operation is already running: "
+                    + ServerState.MAINTENANCE_PROGRESS.summary()));
             return 0;
         }
 
-        source.sendSuccess(() -> Component.literal("[GabConDHSync] Starting safe DH SQLite snapshot..."), false);
+        ServerState.MAINTENANCE_PROGRESS.start("snapshot", "starting", "Preparing safe DH SQLite snapshot");
+        source.sendSuccess(() -> Component.literal("[GabConDHSync] Snapshot started. Use /gabcondhsync status for live progress."), false);
 
         CompletableFuture.runAsync(() -> {
             try {
                 DhSnapshotService.SnapshotResult result = DhSnapshotService.create(ServerConfig.WORLD_ID.get(), dh);
+                ServerState.MAINTENANCE_PROGRESS.complete(result.files().size() + " database(s) captured");
                 source.getServer().execute(() -> source.sendSuccess(
                         () -> Component.literal("[GabConDHSync] Snapshot complete: " + result.files().size()
                                 + " database(s), manifest=" + result.manifest()), false));
             } catch (Exception e) {
+                String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+                ServerState.MAINTENANCE_PROGRESS.fail(message);
                 GabConDhSync.LOGGER.error("[GabConDHSync] Snapshot failed", e);
                 source.getServer().execute(() -> source.sendFailure(
-                        Component.literal("[GabConDHSync] Snapshot failed safely: "
-                                + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()))));
+                        Component.literal("[GabConDHSync] Snapshot failed safely: " + message)));
             } finally {
                 ServerState.SNAPSHOT_RUNNING.set(false);
+                ServerState.MAINTENANCE_PROGRESS.clear();
             }
         }, ServerState.MAINTENANCE_EXECUTOR);
 
@@ -87,11 +93,13 @@ public final class GabConCommands {
 
         if (ServerState.SNAPSHOT_RUNNING.get() || ServerState.PUBLISH_RUNNING.get()
                 || !ServerState.DELTA_RUNNING.compareAndSet(false, true)) {
-            source.sendFailure(Component.literal("[GabConDHSync] Another maintenance operation is already running."));
+            source.sendFailure(Component.literal("[GabConDHSync] Another maintenance operation is already running: "
+                    + ServerState.MAINTENANCE_PROGRESS.summary()));
             return 0;
         }
 
-        source.sendSuccess(() -> Component.literal("[GabConDHSync] Comparing the two latest snapshots. This can take several minutes for a large Overworld..."), false);
+        ServerState.MAINTENANCE_PROGRESS.start("delta", "starting", "Loading the two latest snapshots");
+        source.sendSuccess(() -> Component.literal("[GabConDHSync] Delta generation started. Use /gabcondhsync status for live progress."), false);
 
         CompletableFuture.runAsync(() -> {
             try {
@@ -100,17 +108,21 @@ public final class GabConCommands {
                         .flatMap(file -> file.tables().stream())
                         .mapToLong(table -> table.upserts() + table.deletes())
                         .sum();
+                ServerState.MAINTENANCE_PROGRESS.complete(
+                        result.files().size() + " changed dimension(s), " + operations + " row operation(s)");
                 source.getServer().execute(() -> source.sendSuccess(
                         () -> Component.literal("[GabConDHSync] Delta complete: " + result.files().size()
                                 + " changed dimension(s), " + operations
                                 + " row operation(s), manifest=" + result.manifest()), false));
             } catch (Exception e) {
+                String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+                ServerState.MAINTENANCE_PROGRESS.fail(message);
                 GabConDhSync.LOGGER.error("[GabConDHSync] Delta generation failed", e);
                 source.getServer().execute(() -> source.sendFailure(
-                        Component.literal("[GabConDHSync] Delta failed safely: "
-                                + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()))));
+                        Component.literal("[GabConDHSync] Delta failed safely: " + message)));
             } finally {
                 ServerState.DELTA_RUNNING.set(false);
+                ServerState.MAINTENANCE_PROGRESS.clear();
             }
         }, ServerState.MAINTENANCE_EXECUTOR);
 
@@ -124,18 +136,26 @@ public final class GabConCommands {
         }
         if (ServerState.SNAPSHOT_RUNNING.get() || ServerState.DELTA_RUNNING.get()
                 || !ServerState.PUBLISH_RUNNING.compareAndSet(false, true)) {
-            source.sendFailure(Component.literal("[GabConDHSync] Another maintenance operation is already running."));
+            source.sendFailure(Component.literal("[GabConDHSync] Another maintenance operation is already running: "
+                    + ServerState.MAINTENANCE_PROGRESS.summary()));
             return 0;
         }
 
+        ServerState.MAINTENANCE_PROGRESS.start(
+                "publish",
+                "starting",
+                "Preparing GitHub Release " + ServerConfig.RELEASE_TAG.get()
+        );
         source.sendSuccess(() -> Component.literal(
-                "[GabConDHSync] Publishing bootstrap/deltas to GitHub Release "
-                        + ServerConfig.RELEASE_TAG.get() + ". First publication can upload many GiB."
+                "[GabConDHSync] Publish started for GitHub Release " + ServerConfig.RELEASE_TAG.get()
+                        + ". Use /gabcondhsync status for live progress."
         ), false);
 
         CompletableFuture.runAsync(() -> {
             try {
                 ServerDistributionPublisher.PublicationResult result = ServerDistributionPublisher.publish();
+                ServerState.MAINTENANCE_PROGRESS.complete(
+                        "uploadedAssets=" + result.uploadedAssets() + ", reusedAssets=" + result.reusedAssets());
                 source.getServer().execute(() -> source.sendSuccess(
                         () -> Component.literal("[GabConDHSync] Publish complete: bootstrapCreated="
                                 + result.bootstrapCreated()
@@ -143,12 +163,14 @@ public final class GabConCommands {
                                 + ", reusedAssets=" + result.reusedAssets()
                                 + ", manifest=" + result.localManifest()), false));
             } catch (Exception e) {
+                String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+                ServerState.MAINTENANCE_PROGRESS.fail(message);
                 GabConDhSync.LOGGER.error("[GabConDHSync] Publication failed", e);
                 source.getServer().execute(() -> source.sendFailure(
-                        Component.literal("[GabConDHSync] Publish failed safely: "
-                                + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()))));
+                        Component.literal("[GabConDHSync] Publish failed safely: " + message)));
             } finally {
                 ServerState.PUBLISH_RUNNING.set(false);
+                ServerState.MAINTENANCE_PROGRESS.clear();
             }
         }, ServerState.MAINTENANCE_EXECUTOR);
         return 1;

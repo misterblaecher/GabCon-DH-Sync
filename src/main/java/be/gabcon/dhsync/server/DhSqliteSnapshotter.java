@@ -12,14 +12,24 @@ import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class DhSqliteSnapshotter {
     private static final String DRIVER_CLASS = "dh_sqlite.JDBC";
     private static final String JDBC_PREFIX = "jdbc:dh_sqlite:";
 
+    @FunctionalInterface
+    public interface BackupProgress {
+        void update(String stage, long currentBytes, long totalBytes);
+    }
+
     public record BackupResult(Path path, long size, String sha256) {}
 
     public static BackupResult backup(Path source, Path destination) throws Exception {
+        return backup(source, destination, (stage, current, total) -> {});
+    }
+
+    public static BackupResult backup(Path source, Path destination, BackupProgress progress) throws Exception {
         Path src = source.toAbsolutePath().normalize();
         Path dst = destination.toAbsolutePath().normalize();
         if (!Files.isRegularFile(src)) throw new IOException("DH database not found: " + src);
@@ -29,18 +39,50 @@ public final class DhSqliteSnapshotter {
         Path part = dst.resolveSibling(dst.getFileName() + ".part");
         Files.deleteIfExists(part);
 
+        long expectedBytes = Files.size(src);
+        progress.update("sqlite-backup", 0L, expectedBytes);
+
+        AtomicBoolean monitoring = new AtomicBoolean(true);
+        Thread monitor = new Thread(() -> {
+            while (monitoring.get()) {
+                try {
+                    long copied = Files.isRegularFile(part) ? Files.size(part) : 0L;
+                    progress.update("sqlite-backup", Math.min(copied, expectedBytes), expectedBytes);
+                    Thread.sleep(1000L);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                } catch (Exception ignored) {
+                    // Progress reporting is best-effort and must never make a safe backup fail.
+                }
+            }
+        }, "GabConDHSync-SnapshotProgress");
+        monitor.setDaemon(true);
+
         Class.forName(DRIVER_CLASS);
         try {
-            try (Connection conn = DriverManager.getConnection(JDBC_PREFIX + src);
-                 Statement statement = conn.createStatement()) {
-                statement.execute("PRAGMA busy_timeout=10000");
-                statement.execute("backup to '" + sqliteQuote(part.toString()) + "'");
+            monitor.start();
+            try {
+                try (Connection conn = DriverManager.getConnection(JDBC_PREFIX + src);
+                     Statement statement = conn.createStatement()) {
+                    statement.execute("PRAGMA busy_timeout=10000");
+                    statement.execute("backup to '" + sqliteQuote(part.toString()) + "'");
+                }
+            } finally {
+                monitoring.set(false);
+                monitor.interrupt();
             }
 
+            progress.update("quick-check", expectedBytes, expectedBytes);
             verify(part);
+            progress.update("sha256", expectedBytes, expectedBytes);
+            String sha256 = Hashes.sha256(part);
             atomicReplace(part, dst);
-            return new BackupResult(dst, Files.size(dst), Hashes.sha256(dst));
+            progress.update("complete", expectedBytes, expectedBytes);
+            return new BackupResult(dst, Files.size(dst), sha256);
         } catch (Exception e) {
+            monitoring.set(false);
+            monitor.interrupt();
             Files.deleteIfExists(part);
             throw e;
         }

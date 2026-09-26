@@ -42,10 +42,20 @@ public final class DhSnapshotService {
 
     public record SnapshotResult(Path directory, Path manifest, List<SnapshotFile> files) {}
 
+    private record SnapshotCandidate(
+            String dimension,
+            String dhIdentifier,
+            String fileName,
+            Path source,
+            long sourceSize
+    ) {}
+
     public static SnapshotResult create(String worldId, DhCompatibility.Status dh) throws Exception {
         if (!dh.compatible()) {
             throw new IllegalStateException("Unsupported Distant Horizons pair: " + dh.modVersion() + " / " + dh.apiVersion());
         }
+
+        ServerState.MAINTENANCE_PROGRESS.updatePercent("dh-read-only", "Freezing Distant Horizons writes safely", 1);
 
         Object worldProxy = getWorldProxy();
         boolean loaded = (boolean) invoke(worldProxy, "worldLoaded");
@@ -60,14 +70,16 @@ public final class DhSnapshotService {
         Files.createDirectories(directory);
 
         List<SnapshotFile> snapshots = new ArrayList<>();
-        Set<String> usedNames = new HashSet<>();
 
         try {
+            ServerState.MAINTENANCE_PROGRESS.updatePercent("discover", "Discovering loaded DH databases", 2);
             Object wrappersObject = invoke(worldProxy, "getAllLoadedLevelWrappers");
             if (!(wrappersObject instanceof Iterable<?> wrappers)) {
                 throw new IllegalStateException("Unexpected DH level wrapper collection");
             }
 
+            List<SnapshotCandidate> candidates = new ArrayList<>();
+            Set<String> usedNames = new HashSet<>();
             for (Object wrapper : wrappers) {
                 String dimension = String.valueOf(invoke(wrapper, "getDimensionName"));
                 String dhIdentifier = String.valueOf(invoke(wrapper, "getDhIdentifier"));
@@ -85,14 +97,54 @@ public final class DhSnapshotService {
                 for (int suffix = 2; !usedNames.add(fileName); suffix++) {
                     fileName = baseName + "-" + suffix + ".sqlite";
                 }
-
-                DhSqliteSnapshotter.BackupResult result = DhSqliteSnapshotter.backup(source, directory.resolve(fileName));
-                snapshots.add(new SnapshotFile(dimension, dhIdentifier, fileName, result.size(), result.sha256()));
+                candidates.add(new SnapshotCandidate(
+                        dimension,
+                        dhIdentifier,
+                        fileName,
+                        source,
+                        Files.size(source)
+                ));
             }
 
-            if (snapshots.isEmpty()) {
+            if (candidates.isEmpty()) {
                 throw new IllegalStateException("No loaded Distant Horizons databases were available to snapshot");
             }
+
+            long totalBytes = candidates.stream().mapToLong(SnapshotCandidate::sourceSize).sum();
+            long completedBytes = 0L;
+
+            for (int i = 0; i < candidates.size(); i++) {
+                SnapshotCandidate candidate = candidates.get(i);
+                long completedBefore = completedBytes;
+                String dimensionLabel = candidate.dimension() + " (" + (i + 1) + "/" + candidates.size() + ")";
+
+                DhSqliteSnapshotter.BackupResult result = DhSqliteSnapshotter.backup(
+                        candidate.source(),
+                        directory.resolve(candidate.fileName()),
+                        (stage, current, total) -> {
+                            long globalCurrent = Math.min(totalBytes, completedBefore + Math.min(current, candidate.sourceSize()));
+                            String detail = dimensionLabel
+                                    + " " + MaintenanceProgress.formatBytes(Math.min(current, candidate.sourceSize()))
+                                    + " / " + MaintenanceProgress.formatBytes(candidate.sourceSize());
+                            ServerState.MAINTENANCE_PROGRESS.update(stage, detail, globalCurrent, totalBytes);
+                        }
+                );
+
+                completedBytes += candidate.sourceSize();
+                snapshots.add(new SnapshotFile(
+                        candidate.dimension(),
+                        candidate.dhIdentifier(),
+                        candidate.fileName(),
+                        result.size(),
+                        result.sha256()
+                ));
+            }
+
+            ServerState.MAINTENANCE_PROGRESS.updatePercent(
+                    "manifest",
+                    "Writing snapshot manifest for " + snapshots.size() + " database(s)",
+                    99
+            );
 
             SnapshotManifest manifest = new SnapshotManifest(
                     1,
@@ -108,6 +160,11 @@ public final class DhSnapshotService {
         } finally {
             if (!wasReadOnly) {
                 try {
+                    ServerState.MAINTENANCE_PROGRESS.updatePercent(
+                            "dh-read-write",
+                            "Restoring Distant Horizons read/write mode",
+                            99
+                    );
                     invoke(worldProxy, "setReadOnly", new Class<?>[]{boolean.class}, false);
                 } catch (Exception e) {
                     GabConDhSync.LOGGER.error("[GabConDHSync] Failed to restore DH read/write mode after snapshot", e);

@@ -67,6 +67,7 @@ public final class DhDeltaBuilder {
 
     private static DeltaResult build(SnapshotRef previous, SnapshotRef current, String worldId, Path deltaBase) throws Exception {
         validatePair(previous.manifest(), current.manifest(), worldId);
+        ServerState.MAINTENANCE_PROGRESS.updatePercent("validate", "Validated snapshot manifests", 3);
 
         Instant from = Instant.parse(previous.manifest().createdAtUtc());
         Instant to = Instant.parse(current.manifest().createdAtUtc());
@@ -79,13 +80,30 @@ public final class DhDeltaBuilder {
         Map<String, DhSnapshotService.SnapshotFile> oldByDimension = byDimension(previous.manifest().files());
         Map<String, DhSnapshotService.SnapshotFile> newByDimension = byDimension(current.manifest().files());
         List<DeltaFile> deltaFiles = new ArrayList<>();
+        int dimensionCount = Math.max(newByDimension.size(), 1);
+        int dimensionIndex = 0;
 
         for (Map.Entry<String, DhSnapshotService.SnapshotFile> entry : newByDimension.entrySet()) {
+            dimensionIndex++;
             String dimension = entry.getKey();
+            int dimensionStartPercent = 5 + ((dimensionIndex - 1) * 88 / dimensionCount);
+            int dimensionEndPercent = 5 + (dimensionIndex * 88 / dimensionCount);
+            ServerState.MAINTENANCE_PROGRESS.updatePercent(
+                    "compare-dimension",
+                    dimension + " (" + dimensionIndex + "/" + dimensionCount + ")",
+                    dimensionStartPercent
+            );
             DhSnapshotService.SnapshotFile newer = entry.getValue();
             DhSnapshotService.SnapshotFile older = oldByDimension.get(dimension);
 
-            if (older != null && older.sha256().equalsIgnoreCase(newer.sha256())) continue;
+            if (older != null && older.sha256().equalsIgnoreCase(newer.sha256())) {
+                ServerState.MAINTENANCE_PROGRESS.updatePercent(
+                        "unchanged",
+                        dimension + " unchanged; skipping",
+                        dimensionEndPercent
+                );
+                continue;
+            }
             if (older == null) {
                 throw new IllegalStateException("New dimension without baseline is not supported yet: " + dimension);
             }
@@ -100,7 +118,16 @@ public final class DhDeltaBuilder {
                     ? sourceName.substring(0, sourceName.length() - ".sqlite".length()) + ".delta.sqlite"
                     : sourceName + ".delta.sqlite";
             Path deltaDb = checkedChild(deltaRoot, deltaName);
-            List<TableStats> stats = buildDimensionDelta(oldDb, newDb, deltaDb, older.sha256(), newer.sha256());
+            List<TableStats> stats = buildDimensionDelta(
+                    oldDb,
+                    newDb,
+                    deltaDb,
+                    older.sha256(),
+                    newer.sha256(),
+                    dimension,
+                    dimensionStartPercent,
+                    dimensionEndPercent
+            );
 
             // Even a zero-operation logical delta is retained when snapshot SHA tokens differ.
             // SQLite physical bytes are not a stable logical identity; this tiny delta advances the
@@ -129,12 +156,26 @@ public final class DhDeltaBuilder {
                 current.manifest().distantHorizonsApiVersion(),
                 List.copyOf(deltaFiles)
         );
+        ServerState.MAINTENANCE_PROGRESS.updatePercent(
+                "manifest",
+                "Writing delta manifest for " + deltaFiles.size() + " changed dimension(s)",
+                98
+        );
         Path manifestPath = deltaRoot.resolve("delta.json");
         Files.writeString(manifestPath, GSON.toJson(manifest));
         return new DeltaResult(deltaRoot, manifestPath, List.copyOf(deltaFiles));
     }
 
-    private static List<TableStats> buildDimensionDelta(Path oldDb, Path newDb, Path output, String oldSha256, String newSha256) throws Exception {
+    private static List<TableStats> buildDimensionDelta(
+            Path oldDb,
+            Path newDb,
+            Path output,
+            String oldSha256,
+            String newSha256,
+            String dimension,
+            int startPercent,
+            int endPercent
+    ) throws Exception {
         Files.createDirectories(output.getParent());
         Path part = output.resolveSibling(output.getFileName() + ".part");
         Files.deleteIfExists(part);
@@ -155,9 +196,22 @@ public final class DhDeltaBuilder {
                 statement.execute("INSERT INTO DeltaMeta VALUES ('oldSha256','" + sqliteQuote(oldSha256) + "')");
                 statement.execute("INSERT INTO DeltaMeta VALUES ('newSha256','" + sqliteQuote(newSha256) + "')");
 
+                ServerState.MAINTENANCE_PROGRESS.updatePercent(
+                        "validate-schema",
+                        dimension + " / validating DH schema",
+                        Math.min(endPercent, startPercent + 1)
+                );
                 validateAttachedDatabases(statement);
 
-                for (String table : DATA_TABLES) {
+                for (int tableIndex = 0; tableIndex < DATA_TABLES.size(); tableIndex++) {
+                    String table = DATA_TABLES.get(tableIndex);
+                    int tablePercent = startPercent
+                            + ((tableIndex + 1) * Math.max(1, endPercent - startPercent - 2) / (DATA_TABLES.size() + 1));
+                    ServerState.MAINTENANCE_PROGRESS.updatePercent(
+                            "diff-" + table,
+                            dimension + " / " + table + " (" + (tableIndex + 1) + "/" + DATA_TABLES.size() + ")",
+                            Math.min(endPercent - 1, tablePercent)
+                    );
                     stats.add(diffTable(conn, statement, table));
                 }
 
@@ -165,8 +219,18 @@ public final class DhDeltaBuilder {
                 statement.execute("DETACH DATABASE newdb");
             }
 
+            ServerState.MAINTENANCE_PROGRESS.updatePercent(
+                    "quick-check",
+                    dimension + " / verifying delta SQLite",
+                    Math.max(startPercent, endPercent - 1)
+            );
             DhSqliteSnapshotter.verify(part);
             atomicReplace(part, output);
+            ServerState.MAINTENANCE_PROGRESS.updatePercent(
+                    "dimension-complete",
+                    dimension + " delta ready",
+                    endPercent
+            );
             return List.copyOf(stats);
         } catch (Exception e) {
             Files.deleteIfExists(part);

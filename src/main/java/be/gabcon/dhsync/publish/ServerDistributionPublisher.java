@@ -6,6 +6,7 @@ import be.gabcon.dhsync.distribution.DistributionManifest;
 import be.gabcon.dhsync.distribution.DistributionManifestCodec;
 import be.gabcon.dhsync.server.DhDeltaBuilder;
 import be.gabcon.dhsync.server.DhSnapshotService;
+import be.gabcon.dhsync.server.ServerState;
 import be.gabcon.dhsync.sync.DhDeltaApplier;
 import be.gabcon.dhsync.util.Hashes;
 import be.gabcon.dhsync.util.SafePaths;
@@ -57,6 +58,11 @@ public final class ServerDistributionPublisher {
         long maxAssetBytes = ServerConfig.MAX_DOWNLOAD_BYTES.get();
 
         GitHubReleaseClient github = new GitHubReleaseClient(repository, token);
+        ServerState.MAINTENANCE_PROGRESS.updatePercent(
+                "github-release",
+                "Checking GitHub Release " + tag,
+                5
+        );
         GitHubReleaseClient.Release release =
                 github.ensureRelease(tag, "GabCon DH data - " + worldId);
 
@@ -69,6 +75,11 @@ public final class ServerDistributionPublisher {
         Counters counters = new Counters(0, 0);
 
         if (bootstrapCreated) {
+            ServerState.MAINTENANCE_PROGRESS.updatePercent(
+                    "bootstrap",
+                    "Preparing bootstrap assets from oldest snapshot",
+                    10
+            );
             SnapshotRef bootstrapSnapshot = oldestSnapshot(worldId);
             BuildBootstrapResult built = buildBootstrap(
                     bootstrapSnapshot, github, release, repository, tag, publishRoot, maxAssetBytes
@@ -80,6 +91,11 @@ public final class ServerDistributionPublisher {
             validateLocalPublicationIdentity(manifest, worldId, tag);
         }
 
+        ServerState.MAINTENANCE_PROGRESS.updatePercent(
+                "deltas",
+                "Checking unpublished delta chain",
+                75
+        );
         AppendDeltaResult appended = appendAvailableDeltas(
                 manifest, github, release, worldId, tag, maxAssetBytes
         );
@@ -92,6 +108,11 @@ public final class ServerDistributionPublisher {
         Files.move(part, manifestPath, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
 
         // Manifest is always replaced last. Clients never see a chain that references assets still uploading.
+        ServerState.MAINTENANCE_PROGRESS.updatePercent(
+                "manifest",
+                "Publishing manifest.json last",
+                95
+        );
         GitHubReleaseClient.Release refreshed = github.refresh(tag);
         GabConDhSync.LOGGER.info("[GabConDHSync] Publishing manifest.json last.");
         github.uploadReplacing(refreshed, "manifest.json", manifestPath, "application/json");
@@ -165,6 +186,11 @@ public final class ServerDistributionPublisher {
                         throw new IOException("Invalid bootstrap part size: " + written);
                     }
                     String sha = Hashes.sha256(temp);
+                    ServerState.MAINTENANCE_PROGRESS.updatePercent(
+                            "upload-bootstrap",
+                            file.dimension() + " part " + (index + 1) + "/" + partCount + ": " + name,
+                            25
+                    );
                     GabConDhSync.LOGGER.info("[GabConDHSync] Publishing bootstrap asset {}/{}: {} ({} bytes)",
                             index + 1, partCount, name, written);
                     boolean uploaded = github.uploadImmutable(release, name, temp, "application/octet-stream");
@@ -255,6 +281,11 @@ public final class ServerDistributionPublisher {
                     throw new IOException("Delta exceeds configured asset size limit: " + file.size());
                 }
 
+                ServerState.MAINTENANCE_PROGRESS.updatePercent(
+                        "upload-delta",
+                        file.dimension() + ": " + remoteName,
+                        85
+                );
                 GabConDhSync.LOGGER.info("[GabConDHSync] Publishing delta asset: {} ({} bytes)", remoteName, file.size());
                 boolean uploaded = github.uploadImmutable(release, remoteName, source, "application/octet-stream");
                 if (uploaded) {
