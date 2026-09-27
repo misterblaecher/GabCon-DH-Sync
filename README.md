@@ -2,7 +2,7 @@
 
 Mod **NeoForge 1.21.1 / Java 21** pour distribuer les données **Distant Horizons** d'un serveur Minecraft via **GitHub Releases**, afin d'éviter que le serveur domestique n'envoie directement plusieurs gigaoctets de LOD à chaque client.
 
-> **État : 0.7.0-rc3 en validation réelle.** La base 0.6.2 reste la version stable validée sur GabCon. La RC 0.7 ajoute l'auto-publication serveur crash-safe, une matrice CI de crash/recovery client et la validation SHA-256 distante des assets GitHub. Les blockers de revue ont été corrigés : status non bloquant pendant les uploads, réparation SHA non destructive pour les assets encore référencés, récupération sûre du manifest distant si la copie locale manque, conservation de l'âge du dirty marker entre redémarrages, et isolation/cancellation des tâches auto-publish entre cycles de serveur intégré. La CI d'intégration est verte ; il reste la validation réelle serveur/client avant merge vers `main`.
+> **État : 0.7.0 final.** Cette version ajoute l'auto-publication serveur crash-safe, une matrice CI de crash/recovery client et la validation SHA-256 distante des assets GitHub. Les blockers de revue ont été corrigés : status non bloquant pendant les uploads, réparation SHA non destructive pour les assets encore référencés, récupération sûre du manifest distant si la copie locale manque, conservation de l'âge du dirty marker entre redémarrages, et isolation/cancellation des tâches auto-publish entre cycles de serveur intégré. La CI d'intégration et la revue finale RC3 sont vertes. La validation live GabCon de l'auto-publication 0.7 n'est pas revendiquée dans ce document tant qu'un cycle serveur réel success + failure/retry n'a pas été archivé.
 
 ## Cible
 
@@ -170,7 +170,7 @@ Si `allowFallback=true` et qu'aucune récupération critique n'est en attente, u
 - `maxDownloadBytes=2147483648`
 - `bootstrapPartBytes=1073741824`
 
-`autoPublish=false` reste la valeur par défaut pendant la RC 0.7. Quand il est activé, le serveur déclenche automatiquement `snapshot → delta → publish` dès que `changedRegionThreshold` est atteint, ou quand le plus ancien changement pending dépasse `publishIntervalMinutes`. Les changements sont acquittés uniquement après publication et vérification du manifest distant ; un échec conserve le cycle et les changements pending pour reprise.
+`autoPublish=false` reste la valeur par défaut en 0.7.0 : l'automatisation est explicitement opt-in. Quand il est activé, le serveur déclenche automatiquement `snapshot → delta → publish` dès que `changedRegionThreshold` est atteint, ou quand le plus ancien changement pending dépasse `publishIntervalMinutes`. Les changements sont acquittés uniquement après publication et vérification du manifest distant ; un échec conserve le cycle et les changements pending pour reprise.
 
 ## Fiabilité 0.7.0
 
@@ -194,6 +194,16 @@ Côté GitHub Release, le producteur lit le champ `digest` de chaque asset, vali
 - `repository=misterblaecher/GabCon-DH-Sync`
 - `releaseTag=gabcon-data-gabcon-main`
 - `manifestUrlOverride=""`
+
+## Validation 0.7.0
+
+Le candidat final dérive de `v0.7.0-rc3`. Les trois axes prioritaires sont couverts par la CI :
+
+- auto-publication : seuil/intervalle, watermark, reprise par phases, dirty marker persistant, isolation de lifecycle serveur et non-blocage du thread serveur ;
+- crash/recovery : fault injection full-copy et incrémental, recovery multi-dimension, idempotence, journaux/reverse-deltas invalides ;
+- assets GitHub : digest SHA-256 distant obligatoire, validation après upload, pagination complète, réparation non destructive et preflight avant `manifest.json`.
+
+La revue finale de la RC3 n'a relevé aucun problème majeur et les builds d'intégration sont verts. Le cycle live GabCon spécifique à l'auto-publication 0.7 (succès automatique puis échec d'authentification/retry) reste un contrôle opérationnel à archiver séparément ; il n'est pas présenté ici comme déjà exécuté.
 
 ## Résultats réels GabCon déjà validés
 
