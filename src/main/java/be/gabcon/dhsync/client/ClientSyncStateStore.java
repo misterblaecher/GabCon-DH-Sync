@@ -17,7 +17,11 @@ public final class ClientSyncStateStore {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
     public static Path defaultPath() {
-        return FMLPaths.GAMEDIR.get()
+        return defaultPath(FMLPaths.GAMEDIR.get());
+    }
+
+    static Path defaultPath(Path gameDir) {
+        return gameDir
                 .resolve("gabcondhsync")
                 .resolve("client-state.json")
                 .toAbsolutePath().normalize();

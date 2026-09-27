@@ -1,6 +1,7 @@
 package be.gabcon.dhsync.client;
 
 import be.gabcon.dhsync.server.DhSqliteSnapshotter;
+import net.neoforged.fml.loading.FMLPaths;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -24,11 +25,37 @@ public final class ClientDatabaseCommitter {
             List<Path> rollbackFiles
     ) {}
 
+    interface FaultInjector {
+        default void afterPrepared(List<ClientRecoveryJournal.Entry> entries) {}
+        default void afterTargetInstalled(int index, ClientRecoveryJournal.Entry entry) {}
+        default void afterTargetsInstalled(List<ClientRecoveryJournal.Entry> entries) {}
+        default void afterStateWritten(ClientSyncState.ServerProfile updated) {}
+        default void afterStateCommitted(List<ClientRecoveryJournal.Entry> entries) {}
+    }
+
+    static final class SimulatedCrash extends Error {
+        SimulatedCrash(String message) {
+            super(message);
+        }
+    }
+
+    private static final FaultInjector NO_FAULTS = new FaultInjector() {};
+
     public static CommitResult commit(
             ClientSyncState.ServerProfile previousProfile,
             List<PreparedDimension> prepared
     ) throws Exception {
+        return commit(previousProfile, prepared, FMLPaths.GAMEDIR.get(), NO_FAULTS);
+    }
+
+    static CommitResult commit(
+            ClientSyncState.ServerProfile previousProfile,
+            List<PreparedDimension> prepared,
+            Path gameDir,
+            FaultInjector faultInjector
+    ) throws Exception {
         if (prepared.isEmpty()) return new CommitResult(previousProfile, List.of());
+        FaultInjector faults = faultInjector == null ? NO_FAULTS : faultInjector;
 
         List<ClientRecoveryJournal.Entry> entries = new ArrayList<>();
         for (PreparedDimension dimension : prepared) {
@@ -49,11 +76,18 @@ public final class ClientDatabaseCommitter {
             ));
         }
 
-        ClientRecoveryJournal.write(previousProfile.serverAddress(), ClientRecoveryJournal.Phase.PREPARED,
-                previousProfile, entries);
+        ClientRecoveryJournal.write(
+                gameDir,
+                previousProfile.serverAddress(),
+                ClientRecoveryJournal.Phase.PREPARED,
+                previousProfile,
+                entries
+        );
+        faults.afterPrepared(List.copyOf(entries));
 
         try {
-            for (ClientRecoveryJournal.Entry entry : entries) {
+            for (int index = 0; index < entries.size(); index++) {
+                ClientRecoveryJournal.Entry entry = entries.get(index);
                 Path target = Path.of(entry.targetPath());
                 Path work = Path.of(entry.workPath());
                 Path rollback = Path.of(entry.rollbackPath());
@@ -63,10 +97,17 @@ public final class ClientDatabaseCommitter {
                 }
                 ClientRecoveryJournal.atomicReplace(work, target);
                 DhSqliteSnapshotter.verify(target);
+                faults.afterTargetInstalled(index, entry);
             }
 
-            ClientRecoveryJournal.write(previousProfile.serverAddress(), ClientRecoveryJournal.Phase.TARGETS_INSTALLED,
-                    previousProfile, entries);
+            ClientRecoveryJournal.write(
+                    gameDir,
+                    previousProfile.serverAddress(),
+                    ClientRecoveryJournal.Phase.TARGETS_INSTALLED,
+                    previousProfile,
+                    entries
+            );
+            faults.afterTargetsInstalled(List.copyOf(entries));
 
             Map<String, ClientSyncState.DimensionState> dimensions =
                     new LinkedHashMap<>(previousProfile.dimensions());
@@ -85,10 +126,18 @@ public final class ClientDatabaseCommitter {
                     previousProfile.manifestUrl(),
                     Map.copyOf(dimensions)
             );
-            ClientSyncStateStore.upsert(ClientSyncStateStore.defaultPath(), updated);
-            ClientRecoveryJournal.write(previousProfile.serverAddress(), ClientRecoveryJournal.Phase.STATE_COMMITTED,
-                    previousProfile, entries);
-            ClientRecoveryJournal.delete(previousProfile.serverAddress());
+            ClientSyncStateStore.upsert(ClientSyncStateStore.defaultPath(gameDir), updated);
+            faults.afterStateWritten(updated);
+
+            ClientRecoveryJournal.write(
+                    gameDir,
+                    previousProfile.serverAddress(),
+                    ClientRecoveryJournal.Phase.STATE_COMMITTED,
+                    previousProfile,
+                    entries
+            );
+            faults.afterStateCommitted(List.copyOf(entries));
+            ClientRecoveryJournal.delete(gameDir, previousProfile.serverAddress());
 
             List<Path> rollbacks = entries.stream()
                     .filter(ClientRecoveryJournal.Entry::originalExisted)
@@ -102,7 +151,7 @@ public final class ClientDatabaseCommitter {
             return new CommitResult(updated, rollbacks);
         } catch (Exception failure) {
             try {
-                ClientRecoveryJournal.recoverIfPresent(previousProfile.serverAddress());
+                ClientRecoveryJournal.recoverIfPresent(gameDir, previousProfile.serverAddress());
             } catch (Exception recoveryFailure) {
                 failure.addSuppressed(recoveryFailure);
             }

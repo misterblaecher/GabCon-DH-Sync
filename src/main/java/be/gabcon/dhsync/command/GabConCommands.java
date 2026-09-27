@@ -6,6 +6,7 @@ import be.gabcon.dhsync.publish.ServerDistributionPublisher;
 import be.gabcon.dhsync.server.DhCompatibility;
 import be.gabcon.dhsync.server.DhDeltaBuilder;
 import be.gabcon.dhsync.server.DhSnapshotService;
+import be.gabcon.dhsync.server.ServerAutoPublisher;
 import be.gabcon.dhsync.server.ServerState;
 import com.mojang.brigadier.CommandDispatcher;
 import net.minecraft.commands.CommandSourceStack;
@@ -30,10 +31,9 @@ public final class GabConCommands {
         source.sendSuccess(() -> Component.literal("[GabConDHSync] enabled=" + ServerConfig.ENABLED.get()
                 + ", worldId=" + ServerConfig.WORLD_ID.get()
                 + ", pendingBuckets=" + ServerState.CHANGED_REGIONS.pendingCount()
+                + ", activeOperation=" + ServerState.activeOperation()
                 + ", " + ServerState.MAINTENANCE_PROGRESS.summary()
-                + ", snapshotRunning=" + ServerState.SNAPSHOT_RUNNING.get()
-                + ", deltaRunning=" + ServerState.DELTA_RUNNING.get()
-                + ", publishRunning=" + ServerState.PUBLISH_RUNNING.get()
+                + ", " + ServerAutoPublisher.statusSummary()
                 + ", DH=" + dh.modVersion()
                 + ", API=" + dh.apiVersion()
                 + ", compatible=" + dh.compatible()), false);
@@ -53,12 +53,12 @@ public final class GabConCommands {
             return 0;
         }
 
-        if (ServerState.DELTA_RUNNING.get() || ServerState.PUBLISH_RUNNING.get()
-                || !ServerState.SNAPSHOT_RUNNING.compareAndSet(false, true)) {
+        if (!ServerState.tryBegin(ServerState.MaintenanceOperation.SNAPSHOT)) {
             source.sendFailure(Component.literal("[GabConDHSync] Another maintenance operation is already running: "
-                    + ServerState.MAINTENANCE_PROGRESS.summary()));
+                    + ServerState.activeOperation() + ", " + ServerState.MAINTENANCE_PROGRESS.summary()));
             return 0;
         }
+        ServerState.SNAPSHOT_RUNNING.set(true);
 
         ServerState.MAINTENANCE_PROGRESS.start("snapshot", "starting", "Preparing safe DH SQLite snapshot");
         source.sendSuccess(() -> Component.literal("[GabConDHSync] Snapshot started. Use /gabcondhsync status for live progress."), false);
@@ -79,6 +79,7 @@ public final class GabConCommands {
             } finally {
                 ServerState.SNAPSHOT_RUNNING.set(false);
                 ServerState.MAINTENANCE_PROGRESS.clear();
+                ServerState.finish(ServerState.MaintenanceOperation.SNAPSHOT);
             }
         }, ServerState.MAINTENANCE_EXECUTOR);
 
@@ -91,12 +92,12 @@ public final class GabConCommands {
             return 0;
         }
 
-        if (ServerState.SNAPSHOT_RUNNING.get() || ServerState.PUBLISH_RUNNING.get()
-                || !ServerState.DELTA_RUNNING.compareAndSet(false, true)) {
+        if (!ServerState.tryBegin(ServerState.MaintenanceOperation.DELTA)) {
             source.sendFailure(Component.literal("[GabConDHSync] Another maintenance operation is already running: "
-                    + ServerState.MAINTENANCE_PROGRESS.summary()));
+                    + ServerState.activeOperation() + ", " + ServerState.MAINTENANCE_PROGRESS.summary()));
             return 0;
         }
+        ServerState.DELTA_RUNNING.set(true);
 
         ServerState.MAINTENANCE_PROGRESS.start("delta", "starting", "Loading the two latest snapshots");
         source.sendSuccess(() -> Component.literal("[GabConDHSync] Delta generation started. Use /gabcondhsync status for live progress."), false);
@@ -123,6 +124,7 @@ public final class GabConCommands {
             } finally {
                 ServerState.DELTA_RUNNING.set(false);
                 ServerState.MAINTENANCE_PROGRESS.clear();
+                ServerState.finish(ServerState.MaintenanceOperation.DELTA);
             }
         }, ServerState.MAINTENANCE_EXECUTOR);
 
@@ -134,12 +136,12 @@ public final class GabConCommands {
             source.sendFailure(Component.literal("[GabConDHSync] Publish refused: mod is disabled."));
             return 0;
         }
-        if (ServerState.SNAPSHOT_RUNNING.get() || ServerState.DELTA_RUNNING.get()
-                || !ServerState.PUBLISH_RUNNING.compareAndSet(false, true)) {
+        if (!ServerState.tryBegin(ServerState.MaintenanceOperation.PUBLISH)) {
             source.sendFailure(Component.literal("[GabConDHSync] Another maintenance operation is already running: "
-                    + ServerState.MAINTENANCE_PROGRESS.summary()));
+                    + ServerState.activeOperation() + ", " + ServerState.MAINTENANCE_PROGRESS.summary()));
             return 0;
         }
+        ServerState.PUBLISH_RUNNING.set(true);
 
         ServerState.MAINTENANCE_PROGRESS.start(
                 "publish",
@@ -171,6 +173,7 @@ public final class GabConCommands {
             } finally {
                 ServerState.PUBLISH_RUNNING.set(false);
                 ServerState.MAINTENANCE_PROGRESS.clear();
+                ServerState.finish(ServerState.MaintenanceOperation.PUBLISH);
             }
         }, ServerState.MAINTENANCE_EXECUTOR);
         return 1;

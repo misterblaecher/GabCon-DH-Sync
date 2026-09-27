@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: [ main, feature/initial-dh-sync ]
+    branches: [ main, release/0.7.0, feature/initial-dh-sync ]
   pull_request:
 
 permissions:

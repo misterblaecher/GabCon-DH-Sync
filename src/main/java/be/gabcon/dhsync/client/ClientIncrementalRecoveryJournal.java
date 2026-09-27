@@ -41,28 +41,44 @@ public final class ClientIncrementalRecoveryJournal {
     ) {}
 
     public static Path recoveryDirectory() {
-        return FMLPaths.GAMEDIR.get()
+        return recoveryDirectory(FMLPaths.GAMEDIR.get());
+    }
+
+    static Path recoveryDirectory(Path gameDir) {
+        return gameDir
                 .resolve("gabcondhsync")
                 .resolve("recovery")
                 .toAbsolutePath().normalize();
     }
 
     public static Path pathFor(String serverAddress) {
-        return recoveryDirectory()
+        return pathFor(FMLPaths.GAMEDIR.get(), serverAddress);
+    }
+
+    static Path pathFor(Path gameDir, String serverAddress) {
+        return recoveryDirectory(gameDir)
                 .resolve(keyHash(ClientSyncStateStore.normalizeServerAddress(serverAddress)) + ".incremental.json")
                 .toAbsolutePath().normalize();
     }
 
     public static Path reverseDeltaPath(String serverAddress, String dimension, int index) {
+        return reverseDeltaPath(FMLPaths.GAMEDIR.get(), serverAddress, dimension, index);
+    }
+
+    static Path reverseDeltaPath(Path gameDir, String serverAddress, String dimension, int index) {
         String server = keyHash(ClientSyncStateStore.normalizeServerAddress(serverAddress));
         String safeDimension = dimension == null ? "unknown" : dimension.replaceAll("[^A-Za-z0-9._-]+", "_");
-        return recoveryDirectory()
+        return recoveryDirectory(gameDir)
                 .resolve(server + "-" + safeDimension + "-" + index + ".reverse.sqlite")
                 .toAbsolutePath().normalize();
     }
 
     public static int recoverAll() throws Exception {
-        Path root = recoveryDirectory();
+        return recoverAll(FMLPaths.GAMEDIR.get());
+    }
+
+    static int recoverAll(Path gameDir) throws Exception {
+        Path root = recoveryDirectory(gameDir);
         if (!Files.isDirectory(root)) return 0;
         int recovered = 0;
         try (var stream = Files.list(root)) {
@@ -70,13 +86,23 @@ public final class ClientIncrementalRecoveryJournal {
                     .filter(p -> p.getFileName().toString().endsWith(".incremental.json"))
                     .toList()) {
                 Journal journal = read(file);
-                if (recoverIfPresent(journal.serverAddress())) recovered++;
+                if (recoverIfPresent(gameDir, journal.serverAddress())) recovered++;
             }
         }
         return recovered;
     }
 
     public static void write(
+            String serverAddress,
+            Phase phase,
+            ClientSyncState.ServerProfile previousProfile,
+            List<Entry> entries
+    ) throws IOException {
+        write(FMLPaths.GAMEDIR.get(), serverAddress, phase, previousProfile, entries);
+    }
+
+    static void write(
+            Path gameDir,
             String serverAddress,
             Phase phase,
             ClientSyncState.ServerProfile previousProfile,
@@ -89,7 +115,7 @@ public final class ClientIncrementalRecoveryJournal {
                 previousProfile,
                 List.copyOf(entries)
         );
-        Path file = pathFor(serverAddress);
+        Path file = pathFor(gameDir, serverAddress);
         Files.createDirectories(file.getParent());
         Path part = file.resolveSibling(file.getFileName() + ".part");
         Files.writeString(part, GSON.toJson(journal));
@@ -97,11 +123,19 @@ public final class ClientIncrementalRecoveryJournal {
     }
 
     public static void delete(String serverAddress) throws IOException {
-        Files.deleteIfExists(pathFor(serverAddress));
+        delete(FMLPaths.GAMEDIR.get(), serverAddress);
+    }
+
+    static void delete(Path gameDir, String serverAddress) throws IOException {
+        Files.deleteIfExists(pathFor(gameDir, serverAddress));
     }
 
     public static boolean recoverIfPresent(String serverAddress) throws Exception {
-        Path file = pathFor(serverAddress);
+        return recoverIfPresent(FMLPaths.GAMEDIR.get(), serverAddress);
+    }
+
+    static boolean recoverIfPresent(Path gameDir, String serverAddress) throws Exception {
+        Path file = pathFor(gameDir, serverAddress);
         if (!Files.isRegularFile(file)) return false;
 
         Journal journal = read(file);
@@ -137,7 +171,7 @@ public final class ClientIncrementalRecoveryJournal {
         }
 
         if (journal.previousProfile() != null) {
-            ClientSyncStateStore.upsert(ClientSyncStateStore.defaultPath(), journal.previousProfile());
+            ClientSyncStateStore.upsert(ClientSyncStateStore.defaultPath(gameDir), journal.previousProfile());
         }
         Files.deleteIfExists(file);
         return true;
